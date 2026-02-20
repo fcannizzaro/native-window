@@ -1,6 +1,6 @@
 {
   "name": "@fcannizzaro/native-window",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "homepage": "https://native.fcannizzaro.com",
   "description": "Native OS webview windows for Bun & Node.js (alpha)",
   "module": "index.ts",
@@ -10,7 +10,9 @@
     "index.js",
     "index.ts",
     "native-window.js",
-    "native-window.d.ts"
+    "native-window.d.ts",
+    "README.md",
+    "LICENSE"
   ],
   "author": {
     "name": "Francesco Saverio Cannizzaro (fcannizzaro)",
@@ -52,9 +54,9 @@
     "zod": "^4.3.6"
   },
   "optionalDependencies": {
-    "@fcannizzaro/native-window-darwin-arm64": "0.1.2",
-    "@fcannizzaro/native-window-darwin-x64": "0.1.2",
-    "@fcannizzaro/native-window-win32-x64-msvc": "0.1.2",
-    "@fcannizzaro/native-window-win32-arm64-msvc": "0.1.2"
+    "@fcannizzaro/native-window-darwin-arm64": "0.1.3",
+    "@fcannizzaro/native-window-darwin-x64": "0.1.3",
+    "@fcannizzaro/native-window-win32-x64-msvc": "0.1.3",
+    "@fcannizzaro/native-window-win32-arm64-msvc": "0.1.3"
   }
 }
