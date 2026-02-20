@@ -66,7 +66,7 @@ jobs:
       - name: Move binaries
         run: mv packages/native-window/artifacts/*.node packages/native-window/
       - name: Prepare platform packages
-        run: npx napi prepublish -t npm
+        run: bunx napi prepublish -t npm
         working-directory: packages/native-window
       - name: Publish platform packages
         run: |
