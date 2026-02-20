@@ -192,6 +192,13 @@ const script = getClientScript();
 win.unsafe.evaluateJs(script);
 ```
 
+When using `channelId`, pass it to `getClientScript` so the injected client uses the same namespace:
+
+```ts
+const script = getClientScript({ channelId: "my-namespace" });
+win.unsafe.evaluateJs(script);
+```
+
 ## Channel Options
 
 Pass options as the second argument to `createChannel` or `createWindow`:
@@ -202,6 +209,8 @@ const ch = createChannel(win, {
   injectClient: true,
   onValidationError: (type, payload) => { /* ... */ },
   trustedOrigins: ["https://myapp.com"],
+  channelId: true, // auto-generate a random namespace
+  rateLimit: 100,  // max 100 messages per second
 });
 ```
 
@@ -212,6 +221,9 @@ const ch = createChannel(win, {
 | `onValidationError` | `(type, payload) => void` | — | Called when a payload fails validation |
 | `trustedOrigins` | `string[]` | — | Restrict client script injection and incoming messages to these origins |
 | `maxMessageSize` | `number` | `1_048_576` | Max incoming message size in characters; larger messages are silently dropped |
+| `rateLimit` | `number` | — | Max incoming messages per second (sliding window); excess messages are silently dropped |
+| `maxListenersPerEvent` | `number` | — | Max listeners per event type; calls to `on()` beyond the limit are silently ignored |
+| `channelId` | `string \| true` | — | Channel namespace. All `$ch` envelope values are prefixed with `channelId:`. Pass `true` to auto-generate a random 8-character nonce. Prevents namespace squatting from untrusted scripts |
 
 ## Schema Validation
 

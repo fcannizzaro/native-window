@@ -159,6 +159,45 @@ win.onResize((width, height) => {
 
 > **Note:** Calling `onClose()` more than once replaces the previous handler and emits a `console.warn`. Use a single handler with all your cleanup logic.
 
+## Cookie Access
+
+### `getCookies(url?: string): Promise<CookieInfo[]>`
+
+Query cookies from the native cookie store. Returns a Promise that resolves with validated `CookieInfo` objects, including `HttpOnly` cookies that are invisible to `document.cookie`.
+
+```ts
+const cookies = await win.getCookies("https://example.com");
+const session = cookies.find((c) => c.name === "session_id");
+if (session) {
+  console.log("Session:", session.value, "HttpOnly:", session.httpOnly);
+}
+```
+
+If `url` is provided, only cookies matching that URL are returned. If omitted, all cookies in the webview's cookie store are returned.
+
+Platform behavior:
+- **macOS** — uses `WKHTTPCookieStore.getAllCookies` with client-side URL filtering (domain + path match)
+- **Windows** — uses `ICoreWebView2CookieManager.GetCookies` which filters by URI natively
+
+> **Security:** `getCookies()` returns `HttpOnly` cookies that are inaccessible to `document.cookie` in the webview. Treat the returned data as sensitive — do not expose cookie values to untrusted contexts.
+
+### `CookieInfo`
+
+Return type for each cookie from `getCookies()`:
+
+```ts
+interface CookieInfo {
+  name: string;       // Cookie name
+  value: string;      // Cookie value
+  domain: string;     // Domain the cookie belongs to
+  path: string;       // Path the cookie is restricted to
+  httpOnly: boolean;  // Whether the cookie is HttpOnly (inaccessible to JS)
+  secure: boolean;    // Whether the cookie requires HTTPS
+  sameSite: string;   // SameSite policy: "none", "lax", or "strict"
+  expires: number;    // Expiry as Unix timestamp (seconds); -1 for session cookies
+}
+```
+
 ## Utility Functions
 
 ### `sanitizeForJs`

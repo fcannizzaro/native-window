@@ -103,6 +103,10 @@ export class NativeWindow {
   ): void;
   onTitleChanged(callback: (title: string) => void): void;
   onReload(callback: () => void): void;
+
+  // Cookie access
+  getCookies(url?: string): void;
+  onCookies(callback: (cookies: string) => void): void;
 }
 
 /** Initialize the native window system. Must be called once before creating any windows. */

@@ -201,6 +201,39 @@ const ch = createChannel(win, {
 
 > **Note:** Outgoing `send()` payloads from the host are not validated at runtime — the host is a trusted context. Only incoming messages from the webview are subject to schema validation.
 
+### Rate Limiting
+
+The `rateLimit` option in `ChannelOptions` limits how many incoming IPC messages the channel accepts per second. When the limit is exceeded, additional messages are silently dropped until the sliding window advances. This prevents a malicious or compromised webview page from flooding the host with messages:
+
+```ts
+const ch = createChannel(win, {
+  schemas: { ping: z.string() },
+  rateLimit: 100, // max 100 messages per second
+});
+```
+
+Rate limiting is applied before JSON parsing and schema validation, so dropped messages incur minimal overhead. The default is unlimited — set a limit appropriate for your application's expected message frequency.
+
+> **Note:** The raw `onMessage` callback does not include rate limiting. Rate limiting only applies to typed channels created with `createChannel` or `createWindow`.
+
+### Channel Namespace
+
+The `channelId` option in `ChannelOptions` adds a namespace prefix to all `$ch` values in the IPC envelope. This prevents untrusted scripts in the webview from sending messages that match known event types:
+
+```ts
+const ch = createChannel(win, {
+  schemas: { ping: z.string() },
+  channelId: true, // auto-generate a random 8-character nonce
+});
+```
+
+When `channelId` is set, the envelope format changes from `{ $ch: "ping", p: ... }` to `{ $ch: "abc12345:ping", p: ... }`. Messages with a missing or incorrect prefix are silently dropped. The injected client script automatically uses the same prefix, so host and client stay in sync.
+
+- Pass a `string` for a fixed namespace
+- Pass `true` to auto-generate a random 8-character nonce (recommended for most cases)
+
+Since the nonce is generated at channel creation time and injected into the client script, a malicious script that loads after the IPC client cannot guess the namespace prefix.
+
 ## Origin Control
 
 ### Trusted Origins
@@ -245,6 +278,16 @@ When set, the native IPC handler extracts the origin from the source URL and che
 
 This is independent of the IPC-layer `trustedOrigins` and operates at a lower level. Both can be used together for layered security.
 
+## Cookie Access
+
+The `getCookies()` method on `NativeWindow` returns cookies from the native cookie store, including `HttpOnly` cookies that are invisible to `document.cookie` in the webview. This is useful for reading authentication tokens or session identifiers, but the returned data should be treated as sensitive:
+
+- **Do not forward cookie values to the webview** via IPC or `evaluateJs()` — this would defeat the purpose of `HttpOnly` protection
+- **Do not log cookie values** in production — treat them with the same care as passwords or tokens
+- **Scope queries with a URL** — pass a URL to `getCookies("https://example.com")` to limit results to cookies matching that URL, rather than retrieving all cookies
+
+See the [NativeWindow API reference](/docs/native-window#cookie-access) for usage details.
+
 ## Best Practices
 
 - **Always validate incoming IPC payloads at runtime** — schemas are required when creating channels, ensuring all payloads are validated automatically. Never trust TypeScript types alone for data from the webview.
@@ -260,3 +303,6 @@ This is independent of the IPC-layer `trustedOrigins` and operates at a lower le
 - **Do not call `onClose` multiple times** — calling `onClose()` more than once replaces the previous handler and emits a console warning. Use a single handler with your cleanup logic.
 - **Use the external listener registry for third-party message handlers** — do not attempt to replace `window.__native_message__` directly, as it is frozen after the IPC client initializes. Use `window.__native_message_listeners__.add(fn)` instead.
 - **Handle closed windows** — all public methods on `NativeWindow` throw `Error("Window is closed")` after `close()` is called. Ensure your code handles this if it holds long-lived references to window instances.
+- **Set a `rateLimit` when loading untrusted content** — the `rateLimit` option in `ChannelOptions` prevents a malicious page from flooding the host with IPC messages. Choose a limit appropriate for your application's expected message frequency.
+- **Use `channelId` to namespace your channel** — setting `channelId: true` generates a random namespace prefix that prevents untrusted scripts from spoofing known event types. This is especially important when loading third-party content.
+- **Do not forward `HttpOnly` cookies to the webview** — `getCookies()` returns `HttpOnly` cookies from the native cookie store. Forwarding these values to the webview via IPC or `evaluateJs()` would defeat the browser's `HttpOnly` protection. Keep cookie data on the host side.

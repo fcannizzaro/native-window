@@ -932,6 +932,147 @@ impl WindowsPlatform {
                 }
                 result
             }
+            Command::GetCookies { id, url } => {
+                let entry = self
+                    .windows
+                    .get(&id)
+                    .ok_or_else(|| napi::Error::from_reason(format!("Window {} not found", id)))?;
+
+                if let Some(ref webview) = entry.webview {
+                    if let Some(on_cookies) = event_handlers
+                        .get(&id)
+                        .and_then(|h| h.on_cookies.as_ref())
+                    {
+                        let tsfn = on_cookies.clone();
+                        let uri = url.unwrap_or_default();
+                        let uri_wide: Vec<u16> =
+                            uri.encode_utf16().chain(std::iter::once(0)).collect();
+
+                        unsafe {
+                            let webview2: ICoreWebView2_2 = webview.cast().map_err(|e| {
+                                napi::Error::from_reason(format!(
+                                    "WebView2 v2 not available: {}",
+                                    e
+                                ))
+                            })?;
+                            let cookie_manager =
+                                webview2.CookieManager().map_err(|e| {
+                                    napi::Error::from_reason(format!(
+                                        "CookieManager failed: {}",
+                                        e
+                                    ))
+                                })?;
+
+                            let _ = cookie_manager.GetCookies(
+                                PCWSTR(uri_wide.as_ptr()),
+                                &webview2_com::GetCookiesCompletedHandler::create(
+                                    Box::new(move |result, cookie_list| {
+                                        result?;
+                                        if let Some(cookie_list) = cookie_list {
+                                            let mut count = 0u32;
+                                            cookie_list.Count(&mut count)?;
+
+                                            let mut json_parts: Vec<String> =
+                                                Vec::with_capacity(count as usize);
+
+                                            for i in 0..count {
+                                                let cookie =
+                                                    cookie_list.GetValueAtIndex(i)?;
+
+                                                let mut name = PWSTR::null();
+                                                cookie.Name(&mut name)?;
+                                                let name_str =
+                                                    name.to_string().unwrap_or_default();
+                                                if !name.is_null() {
+                                                    CoTaskMemFree(Some(
+                                                        name.0 as *const _,
+                                                    ));
+                                                }
+
+                                                let mut value = PWSTR::null();
+                                                cookie.Value(&mut value)?;
+                                                let value_str =
+                                                    value.to_string().unwrap_or_default();
+                                                if !value.is_null() {
+                                                    CoTaskMemFree(Some(
+                                                        value.0 as *const _,
+                                                    ));
+                                                }
+
+                                                let mut domain = PWSTR::null();
+                                                cookie.Domain(&mut domain)?;
+                                                let domain_str = domain
+                                                    .to_string()
+                                                    .unwrap_or_default();
+                                                if !domain.is_null() {
+                                                    CoTaskMemFree(Some(
+                                                        domain.0 as *const _,
+                                                    ));
+                                                }
+
+                                                let mut path = PWSTR::null();
+                                                cookie.Path(&mut path)?;
+                                                let path_str =
+                                                    path.to_string().unwrap_or_default();
+                                                if !path.is_null() {
+                                                    CoTaskMemFree(Some(
+                                                        path.0 as *const _,
+                                                    ));
+                                                }
+
+                                                let mut http_only = BOOL::default();
+                                                cookie.IsHttpOnly(&mut http_only)?;
+
+                                                let mut secure = BOOL::default();
+                                                cookie.IsSecure(&mut secure)?;
+
+                                                let mut expires = 0.0f64;
+                                                cookie.Expires(&mut expires)?;
+
+                                                let mut same_site =
+                                                    COREWEBVIEW2_COOKIE_SAME_SITE_KIND(0);
+                                                cookie.SameSite(&mut same_site)?;
+                                                let same_site_str = if same_site
+                                                    == COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX
+                                                {
+                                                    "lax"
+                                                } else if same_site
+                                                    == COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT
+                                                {
+                                                    "strict"
+                                                } else {
+                                                    "none"
+                                                };
+
+                                                json_parts.push(format!(
+                                                    "{{\"name\":{},\"value\":{},\"domain\":{},\"path\":{},\"httpOnly\":{},\"secure\":{},\"sameSite\":\"{}\",\"expires\":{}}}",
+                                                    crate::window_manager::json_escape(&name_str),
+                                                    crate::window_manager::json_escape(&value_str),
+                                                    crate::window_manager::json_escape(&domain_str),
+                                                    crate::window_manager::json_escape(&path_str),
+                                                    http_only.as_bool(),
+                                                    secure.as_bool(),
+                                                    same_site_str,
+                                                    expires as i64,
+                                                ));
+                                            }
+
+                                            let json =
+                                                format!("[{}]", json_parts.join(","));
+                                            tsfn.call(
+                                                json,
+                                                ThreadsafeFunctionCallMode::NonBlocking,
+                                            );
+                                        }
+                                        Ok(())
+                                    }),
+                                ),
+                            );
+                        }
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }

@@ -25,6 +25,10 @@ pub type TitleChangedCallback = ThreadsafeFunction<String, ErrorStrategy::Fatal>
 /// Callback for reload events (no payload).
 pub type ReloadCallback = ThreadsafeFunction<(), ErrorStrategy::Fatal>;
 
+/// Callback for cookie query results (JSON payload string).
+/// The payload is a JSON array of cookie objects.
+pub type CookiesCallback = ThreadsafeFunction<String, ErrorStrategy::Fatal>;
+
 /// Stored event handlers for a window.
 pub struct WindowEventHandlers {
     pub on_message: Option<MessageCallback>,
@@ -36,6 +40,7 @@ pub struct WindowEventHandlers {
     pub on_page_load: Option<PageLoadCallback>,
     pub on_title_changed: Option<TitleChangedCallback>,
     pub on_reload: Option<ReloadCallback>,
+    pub on_cookies: Option<CookiesCallback>,
 }
 
 impl WindowEventHandlers {
@@ -50,6 +55,7 @@ impl WindowEventHandlers {
             on_page_load: None,
             on_title_changed: None,
             on_reload: None,
+            on_cookies: None,
         }
     }
 }

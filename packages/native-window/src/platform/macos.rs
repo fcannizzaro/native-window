@@ -3,11 +3,11 @@ use std::collections::HashMap;
 use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::{define_class, msg_send, ClassType, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2::{define_class, msg_send, sel, ClassType, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEvent, NSEventMask,
-    NSFloatingWindowLevel, NSNormalWindowLevel, NSRunningApplication, NSWindow,
-    NSWindowDelegate, NSWindowStyleMask,
+    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEvent,
+    NSEventModifierFlags, NSEventMask, NSFloatingWindowLevel, NSMenu, NSMenuItem,
+    NSNormalWindowLevel, NSRunningApplication, NSWindow, NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_foundation::{
     ns_string, NSDate, NSDefaultRunLoopMode, NSNotification, NSObjectProtocol, NSPoint, NSRect,
@@ -264,6 +264,52 @@ define_class!(
                 decision_handler.call((objc2_web_kit::WKNavigationActionPolicy::Allow,));
             }
         }
+
+        #[unsafe(method(webView:didStartProvisionalNavigation:))]
+        fn did_start_provisional_navigation(
+            &self,
+            web_view: &WKWebView,
+            _navigation: Option<&WKNavigation>,
+        ) {
+            let window_id = *self.ivars();
+            let url = unsafe {
+                let url_obj: Option<Retained<objc2_foundation::NSURL>> =
+                    msg_send![web_view, URL];
+                url_obj
+                    .map(|u| {
+                        let abs: Retained<NSString> = msg_send![&u, absoluteString];
+                        abs.to_string()
+                    })
+                    .unwrap_or_default()
+            };
+            crate::window_manager::PENDING_PAGE_LOADS.with(|p| {
+                p.borrow_mut()
+                    .push((window_id, "started".to_string(), url));
+            });
+        }
+
+        #[unsafe(method(webView:didFinishNavigation:))]
+        fn did_finish_navigation(
+            &self,
+            web_view: &WKWebView,
+            _navigation: Option<&WKNavigation>,
+        ) {
+            let window_id = *self.ivars();
+            let url = unsafe {
+                let url_obj: Option<Retained<objc2_foundation::NSURL>> =
+                    msg_send![web_view, URL];
+                url_obj
+                    .map(|u| {
+                        let abs: Retained<NSString> = msg_send![&u, absoluteString];
+                        abs.to_string()
+                    })
+                    .unwrap_or_default()
+            };
+            crate::window_manager::PENDING_PAGE_LOADS.with(|p| {
+                p.borrow_mut()
+                    .push((window_id, "finished".to_string(), url));
+            });
+        }
     }
 );
 
@@ -271,6 +317,105 @@ impl NavigationDelegate {
     fn new(mtm: MainThreadMarker, window_id: u32) -> Retained<Self> {
         let delegate = Self::alloc(mtm).set_ivars(window_id);
         unsafe { msg_send![super(delegate), init] }
+    }
+}
+
+// ── Edit menu ────────────────────────────────────────────────────
+// Set up a minimal main menu with an Edit submenu so that standard
+// keyboard shortcuts (Cmd+C/V/X/A/Z) work inside the WKWebView
+// through the AppKit responder chain.
+
+/// Check if a cookie's domain/path matches a given URL.
+/// Used for client-side filtering on macOS where `getAllCookies` returns all cookies.
+fn cookie_matches_url(cookie_domain: &str, cookie_path: &str, url: &str) -> bool {
+    let rest = match url.find("://") {
+        Some(idx) => &url[idx + 3..],
+        None => return false,
+    };
+    let host_end = rest
+        .find(|c: char| c == '/' || c == '?' || c == '#')
+        .unwrap_or(rest.len());
+    let host = rest[..host_end]
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    let url_path = if host_end < rest.len() {
+        &rest[host_end..]
+    } else {
+        "/"
+    };
+
+    let domain = cookie_domain.to_lowercase();
+    let domain_matches = if domain.starts_with('.') {
+        let d = &domain[1..];
+        host == d || host.ends_with(&format!(".{}", d))
+    } else {
+        host == domain
+    };
+
+    domain_matches && url_path.starts_with(cookie_path)
+}
+
+fn setup_main_menu(app: &NSApplication, mtm: MainThreadMarker) {
+    unsafe {
+        let menu_bar = NSMenu::new(mtm);
+
+        let edit_menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("Edit"));
+
+        // Undo  (Cmd+Z)
+        edit_menu.addItemWithTitle_action_keyEquivalent(
+            ns_string!("Undo"),
+            Some(sel!(undo:)),
+            ns_string!("z"),
+        );
+
+        // Redo  (Cmd+Shift+Z)
+        let redo = edit_menu.addItemWithTitle_action_keyEquivalent(
+            ns_string!("Redo"),
+            Some(sel!(redo:)),
+            ns_string!("z"),
+        );
+        redo.setKeyEquivalentModifierMask(
+            NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
+        );
+
+        edit_menu.addItem(&NSMenuItem::separatorItem(mtm));
+
+        // Cut  (Cmd+X)
+        edit_menu.addItemWithTitle_action_keyEquivalent(
+            ns_string!("Cut"),
+            Some(sel!(cut:)),
+            ns_string!("x"),
+        );
+
+        // Copy  (Cmd+C)
+        edit_menu.addItemWithTitle_action_keyEquivalent(
+            ns_string!("Copy"),
+            Some(sel!(copy:)),
+            ns_string!("c"),
+        );
+
+        // Paste  (Cmd+V)
+        edit_menu.addItemWithTitle_action_keyEquivalent(
+            ns_string!("Paste"),
+            Some(sel!(paste:)),
+            ns_string!("v"),
+        );
+
+        // Select All  (Cmd+A)
+        edit_menu.addItemWithTitle_action_keyEquivalent(
+            ns_string!("Select All"),
+            Some(sel!(selectAll:)),
+            ns_string!("a"),
+        );
+
+        // Attach the Edit menu to the menu bar
+        let edit_item = NSMenuItem::new(mtm);
+        edit_item.setSubmenu(Some(&edit_menu));
+        menu_bar.addItem(&edit_item);
+
+        app.setMainMenu(Some(&menu_bar));
     }
 }
 
@@ -291,6 +436,11 @@ impl MacOSPlatform {
                 objc2_app_kit::NSApplicationActivationOptions::ActivateIgnoringOtherApps,
             );
         }
+
+        // Install a main menu with an Edit submenu so that standard
+        // keyboard shortcuts (Cmd+C/V/X/A/Z) reach the WKWebView
+        // through the AppKit responder chain.
+        setup_main_menu(&app, mtm);
 
         Ok(Self {
             windows: HashMap::new(),
@@ -853,6 +1003,123 @@ impl MacOSPlatform {
                     }
                 }
                 result
+            }
+            Command::GetCookies { id, url } => {
+                let entry = self
+                    .windows
+                    .get(&id)
+                    .ok_or_else(|| napi::Error::from_reason(format!("Window {} not found", id)))?;
+
+                if let Some(on_cookies) = event_handlers
+                    .get(&id)
+                    .and_then(|h| h.on_cookies.as_ref())
+                {
+                    let tsfn = on_cookies.clone();
+                    let filter_url = url;
+
+                    unsafe {
+                        let config: Retained<objc2::runtime::AnyObject> =
+                            msg_send![&entry.webview, configuration];
+                        let data_store: Retained<objc2::runtime::AnyObject> =
+                            msg_send![&config, websiteDataStore];
+                        let cookie_store: Retained<objc2::runtime::AnyObject> =
+                            msg_send![&data_store, httpCookieStore];
+
+                        let block = block2::RcBlock::new(
+                            move |cookies: std::ptr::NonNull<objc2::runtime::AnyObject>| {
+                                let count: usize =
+                                    msg_send![cookies.as_ptr(), count];
+                                let mut json_parts: Vec<String> =
+                                    Vec::with_capacity(count);
+
+                                for i in 0..count {
+                                    let cookie: *const objc2::runtime::AnyObject =
+                                        msg_send![cookies.as_ptr(), objectAtIndex: i];
+                                    if cookie.is_null() {
+                                        continue;
+                                    }
+
+                                    let name: Retained<NSString> =
+                                        msg_send![cookie, name];
+                                    let value: Retained<NSString> =
+                                        msg_send![cookie, value];
+                                    let domain: Retained<NSString> =
+                                        msg_send![cookie, domain];
+                                    let path: Retained<NSString> =
+                                        msg_send![cookie, path];
+                                    let http_only: bool =
+                                        msg_send![cookie, isHTTPOnly];
+                                    let secure: bool =
+                                        msg_send![cookie, isSecure];
+
+                                    // Filter by URL if specified
+                                    if let Some(ref url) = filter_url {
+                                        if !cookie_matches_url(
+                                            &domain.to_string(),
+                                            &path.to_string(),
+                                            url,
+                                        ) {
+                                            continue;
+                                        }
+                                    }
+
+                                    // expiresDate → Unix timestamp (-1 for session)
+                                    let expires_date: Option<Retained<NSDate>> =
+                                        msg_send![cookie, expiresDate];
+                                    let expires: i64 = match expires_date {
+                                        Some(date) => {
+                                            let ts: f64 = msg_send![
+                                                &date,
+                                                timeIntervalSince1970
+                                            ];
+                                            ts as i64
+                                        }
+                                        None => -1,
+                                    };
+
+                                    // sameSitePolicy → "none" | "lax" | "strict"
+                                    let same_site_ns: Option<Retained<NSString>> =
+                                        msg_send![cookie, sameSitePolicy];
+                                    let same_site = match same_site_ns {
+                                        Some(s) => {
+                                            let lower =
+                                                s.to_string().to_lowercase();
+                                            if lower == "lax" {
+                                                "lax"
+                                            } else if lower == "strict" {
+                                                "strict"
+                                            } else {
+                                                "none"
+                                            }
+                                        }
+                                        None => "none",
+                                    };
+
+                                    json_parts.push(format!(
+                                        "{{\"name\":{},\"value\":{},\"domain\":{},\"path\":{},\"httpOnly\":{},\"secure\":{},\"sameSite\":\"{}\",\"expires\":{}}}",
+                                        crate::window_manager::json_escape(&name.to_string()),
+                                        crate::window_manager::json_escape(&value.to_string()),
+                                        crate::window_manager::json_escape(&domain.to_string()),
+                                        crate::window_manager::json_escape(&path.to_string()),
+                                        http_only,
+                                        secure,
+                                        same_site,
+                                        expires,
+                                    ));
+                                }
+
+                                let json = format!("[{}]", json_parts.join(","));
+                                tsfn.call(
+                                    json,
+                                    napi::threadsafe_function::ThreadsafeFunctionCallMode::NonBlocking,
+                                );
+                            },
+                        );
+
+                        let _: () = msg_send![&cookie_store, getAllCookies: &*block];
+                    }
+                }
+                Ok(())
             }
         }
     }

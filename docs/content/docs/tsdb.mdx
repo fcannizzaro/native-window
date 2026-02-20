@@ -209,3 +209,21 @@ The webview-side sync function uses two strategies to receive messages:
 2. **Fallback: direct interposition** — when the IPC client is not present (standalone usage), the sync function interposes on `window.__native_message__` directly, chaining to the previous handler. The assignment is wrapped in `try/catch` for safety in case the property was frozen.
 
 For the best experience, use the TSDB adapter alongside the Typed IPC layer. See the [Security guide](/docs/security#external-listener-registry) for details on how the listener registry is hardened.
+
+## Type Exports
+
+### Host (`@fcannizzaro/native-window-tsdb`)
+
+| Export | Description |
+|--------|-------------|
+| `MessageSender` | Sender interface: `{ postMessage(message: string): void }` |
+| `DataSourceOptions<T, TKey>` | Options for `createDataSource` (`channel`, `getKey`) |
+| `DataSource<T, TKey>` | Return type of `createDataSource` (`insert`, `update`, `delete`, `batch`, `sync`) |
+| `BatchBuilder<T, TKey>` | Builder passed to the `batch()` callback (`insert`, `update`, `delete`) |
+
+### Webview (`@fcannizzaro/native-window-tsdb/client`)
+
+| Export | Description |
+|--------|-------------|
+| `NativeWindowCollectionConfig<T, TKey>` | Options for `nativeWindowCollectionOptions` (`id`, `channel`, `getKey`) |
+| `NativeWindowCollectionResult<T, TKey>` | Return type of `nativeWindowCollectionOptions` — pass directly to `createCollection()` |

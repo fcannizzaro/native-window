@@ -31,7 +31,7 @@ const ch = createWindow(
     height: 768,
     decorations: true,
     devtools: true, // disable in production
-    // csp: "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:",
+    csp: "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:",
     // ⬆ Disabled: CSP 'self' resolves to nothing on Windows (about:blank origin from loadHtml).
     // Enable when Windows loadHtml uses a synthetic origin like macOS.
   },

@@ -452,4 +452,38 @@ impl NativeWindow {
         });
         Ok(())
     }
+
+    // ---- Cookie access ----
+
+    /// Query cookies from the native cookie store.
+    /// Results are delivered asynchronously via the `onCookies` callback.
+    /// If `url` is provided, only cookies matching that URL are returned.
+    /// If omitted, all cookies are returned.
+    #[napi]
+    pub fn get_cookies(&self, url: Option<String>) -> Result<()> {
+        with_manager(|mgr| {
+            mgr.push_command(Command::GetCookies {
+                id: self.id,
+                url,
+            });
+        });
+        Ok(())
+    }
+
+    /// Register a handler for cookie query results.
+    /// The callback receives a JSON string containing an array of cookie objects.
+    #[napi(ts_args_type = "callback: (cookies: string) => void")]
+    pub fn on_cookies(&self, callback: JsFunction) -> Result<()> {
+        let tsfn: ThreadsafeFunction<String, ErrorStrategy::Fatal> =
+            callback.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<String>| {
+                ctx.env.create_string(ctx.value.as_str()).map(|v| vec![v])
+            })?;
+
+        with_manager(|mgr| {
+            if let Some(handlers) = mgr.event_handlers.get_mut(&self.id) {
+                handlers.on_cookies = Some(tsfn);
+            }
+        });
+        Ok(())
+    }
 }

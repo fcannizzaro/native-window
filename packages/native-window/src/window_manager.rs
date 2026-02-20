@@ -85,6 +85,10 @@ pub enum Command {
     Reload {
         id: u32,
     },
+    GetCookies {
+        id: u32,
+        url: Option<String>,
+    },
 }
 
 /// Global window manager state. Lives in thread_local storage.
@@ -229,4 +233,28 @@ pub fn is_origin_trusted(window_id: u32, source_url: &str) -> bool {
             Err(_) => true, // Can't borrow = allow (deferred messages checked later)
         }
     })
+}
+
+// ── JSON helpers ────────────────────────────────────────────────
+
+/// Escape a string for safe embedding as a JSON string value.
+/// The returned string includes surrounding double quotes.
+pub fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }

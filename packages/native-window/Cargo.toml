@@ -15,6 +15,8 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = [
   "NSApplication",
   "NSEvent",
+  "NSMenu",
+  "NSMenuItem",
   "NSRunningApplication",
   "NSWindow",
   "NSView",
@@ -24,6 +26,7 @@ objc2-app-kit = { version = "0.3", features = [
 ] }
 objc2-foundation = { version = "0.3", features = [
   "NSDate",
+  "NSHTTPCookie",
   "NSRunLoop",
   "NSString",
   "NSGeometry",
@@ -40,6 +43,8 @@ objc2-web-kit = { version = "0.3", features = [
   "WKNavigationAction",
   "WKNavigationDelegate",
   "WKPreferences",
+  "WKHTTPCookieStore",
+  "WKWebsiteDataStore",
   "block2",
   "objc2-app-kit",
 ] }

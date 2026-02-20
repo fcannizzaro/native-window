@@ -68,6 +68,43 @@ export interface UnsafeNamespace {
 }
 
 // ---------------------------------------------------------------------------
+// Cookie types
+// ---------------------------------------------------------------------------
+
+/**
+ * Information about a cookie from the native cookie store.
+ * Includes `HttpOnly` cookies that are invisible to `document.cookie`.
+ *
+ * @example
+ * ```ts
+ * win.onCookies((cookies) => {
+ *   for (const c of cookies) {
+ *     console.log(c.name, c.value, c.httpOnly);
+ *   }
+ * });
+ * win.getCookies("https://example.com");
+ * ```
+ */
+export interface CookieInfo {
+  /** Cookie name. */
+  name: string;
+  /** Cookie value. */
+  value: string;
+  /** Domain the cookie belongs to. */
+  domain: string;
+  /** Path the cookie is restricted to. */
+  path: string;
+  /** Whether the cookie is HttpOnly (inaccessible to JS). */
+  httpOnly: boolean;
+  /** Whether the cookie requires HTTPS. */
+  secure: boolean;
+  /** SameSite policy: "none", "lax", or "strict". */
+  sameSite: string;
+  /** Expiry as Unix timestamp (seconds). -1 for session cookies. */
+  expires: number;
+}
+
+// ---------------------------------------------------------------------------
 // NativeWindow wrapper – auto-init, auto-pump, auto-stop
 // ---------------------------------------------------------------------------
 
@@ -337,6 +374,90 @@ export class NativeWindow {
   onReload(callback: () => void): void {
     this._ensureOpen();
     this._native.onReload(callback);
+  }
+
+  // ---- Cookie access ----
+
+  /**
+   * Validate and parse a raw cookies JSON array from the native layer.
+   * Returns a cleaned {@link CookieInfo} array or `null` if the payload
+   * is malformed.
+   *
+   * @internal
+   */
+  private _validateCookies(raw: string): CookieInfo[] | null {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(parsed)) return null;
+
+    const cookies: CookieInfo[] = [];
+    for (const item of parsed) {
+      if (typeof item !== "object" || item === null) continue;
+      const obj = item as Record<string, unknown>;
+      if (typeof obj.name !== "string" || typeof obj.value !== "string") {
+        continue;
+      }
+      if (typeof obj.domain !== "string" || typeof obj.path !== "string") {
+        continue;
+      }
+      if (typeof obj.httpOnly !== "boolean" || typeof obj.secure !== "boolean") {
+        continue;
+      }
+      if (typeof obj.sameSite !== "string" || typeof obj.expires !== "number") {
+        continue;
+      }
+      cookies.push({
+        name: obj.name as string,
+        value: obj.value as string,
+        domain: obj.domain as string,
+        path: obj.path as string,
+        httpOnly: obj.httpOnly as boolean,
+        secure: obj.secure as boolean,
+        sameSite: obj.sameSite as string,
+        expires: obj.expires as number,
+      });
+    }
+    return cookies;
+  }
+
+  /**
+   * Query cookies from the native cookie store.
+   *
+   * Returns a Promise that resolves with validated {@link CookieInfo} objects,
+   * including `HttpOnly` cookies that are invisible to `document.cookie`.
+   *
+   * - **macOS**: Uses `WKHTTPCookieStore.getAllCookies` with client-side
+   *   URL filtering (domain + path match).
+   * - **Windows**: Uses `ICoreWebView2CookieManager.GetCookies` which
+   *   filters by URI natively.
+   *
+   * @param url  If provided, only cookies matching this URL are returned.
+   *             If omitted, all cookies in the webview's cookie store are returned.
+   *
+   * @example
+   * ```ts
+   * const cookies = await win.getCookies("https://example.com");
+   * const session = cookies.find((c) => c.name === "session_id");
+   * if (session) console.log("Session:", session.value, "HttpOnly:", session.httpOnly);
+   * ```
+   */
+  getCookies(url?: string): Promise<CookieInfo[]> {
+    this._ensureOpen();
+    return new Promise((resolve, reject) => {
+      this._native.onCookies((raw: string) => {
+        const validated = this._validateCookies(raw);
+        if (validated) {
+          resolve(validated);
+        } else {
+          reject(new Error("Failed to parse cookie response"));
+        }
+      });
+      this._native.getCookies(url);
+    });
   }
 }
 
