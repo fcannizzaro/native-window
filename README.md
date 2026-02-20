@@ -8,6 +8,7 @@
 [![npm](https://img.shields.io/npm/v/@fcannizzaro/native-window)](https://www.npmjs.com/package/@fcannizzaro/native-window)
 [![npm](https://img.shields.io/npm/v/@fcannizzaro/native-window-ipc?label=native-window-ipc)](https://www.npmjs.com/package/@fcannizzaro/native-window-ipc)
 [![npm](https://img.shields.io/npm/v/@fcannizzaro/native-window-ipc-react?label=native-window-ipc-react)](https://www.npmjs.com/package/@fcannizzaro/native-window-ipc-react)
+[![npm](https://img.shields.io/npm/v/@fcannizzaro/native-window-tsdb?label=native-window-tsdb)](https://www.npmjs.com/package/@fcannizzaro/native-window-tsdb)
 
 > [!WARNING]
 > This project is in **alpha**. APIs may change without notice and some features may be incomplete or unstable.
@@ -33,6 +34,7 @@ Native OS webviews for Bun & Node.js. Create real desktop windows with embedded 
 | [`@fcannizzaro/native-window`](./packages/native-window) | Rust napi-rs addon providing native window + webview APIs |
 | [`@fcannizzaro/native-window-ipc`](./packages/native-window-ipc) | Pure TypeScript typesafe IPC channel layer |
 | [`@fcannizzaro/native-window-ipc-react`](./packages/native-window-ipc-react) | React bindings for the typed IPC layer |
+| [`@fcannizzaro/native-window-tsdb`](./packages/native-window-tsdb) | TanStack DB collection adapter for native-window IPC |
 
 ## Quick Start
 
@@ -264,6 +266,20 @@ interface TypedChannel<T extends EventMap> {
   off<K extends keyof T & string>(type: K, handler: (payload: T[K]) => void): void;
 }
 ```
+
+## Security
+
+All security hardening is compiled in by default on both macOS and Windows — no build-time feature flags required.
+
+- **URL scheme blocking** — `javascript:`, `file:`, `data:`, and `blob:` navigations are blocked at the native layer
+- **Content Security Policy** — inject a CSP via the `csp` option in `WindowOptions`
+- **Trusted origin filtering** — restrict IPC messages and client injection to specific origins at the native and IPC layers
+- **WebView2 surface hardening** — context menus, status bar, and built-in error page are disabled (Windows)
+- **IPC bridge hardening** — `window.ipc` and `window.__channel__` are frozen, non-writable objects
+- **Message size limits** — 10 MB hard limit at the native layer, configurable 1 MB default at the IPC layer
+- **Schema-based validation** — all incoming IPC payloads are validated at runtime against user-defined schemas
+
+See the [Security documentation](https://native-window.dev/docs/security) for the full threat model and best practices.
 
 ## Building
 
