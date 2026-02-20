@@ -1,6 +1,9 @@
 name: Deploy Docs
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'docs/**'
 permissions:
   pages: write
   id-token: write
