@@ -1,0 +1,19 @@
+{
+  "name": "basic-sample",
+  "private": true,
+  "scripts": {
+    "dev": "bun src/index",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fcannizzaro/native-window": "workspace:*",
+    "@fcannizzaro/native-window-ipc": "workspace:*",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.9"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}

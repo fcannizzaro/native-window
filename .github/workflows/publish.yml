@@ -1,0 +1,87 @@
+name: Publish
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  build:
+    name: Build - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-apple-darwin
+            runner: macos-13
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+          - target: aarch64-pc-windows-msvc
+            runner: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            packages/native-window/target/
+          key: cargo-${{ matrix.target }}-${{ hashFiles('packages/native-window/Cargo.lock') }}
+          restore-keys: cargo-${{ matrix.target }}-
+      - run: bun napi build --release --platform --target ${{ matrix.target }}
+        working-directory: packages/native-window
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.target }}
+          path: packages/native-window/native-window.*.node
+          if-no-files-found: error
+  publish:
+    name: Publish to npm
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages/native-window/artifacts
+          merge-multiple: true
+      - name: Move binaries
+        run: mv packages/native-window/artifacts/*.node packages/native-window/
+      - name: Prepare platform packages
+        run: npx napi prepublish -t npm
+        working-directory: packages/native-window
+      - name: Publish platform packages
+        run: |
+          for dir in packages/native-window/npm/*/; do
+            npm publish "$dir" --access public --provenance
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish
+        run: npm publish --access public --provenance
+        working-directory: packages/native-window
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish
+        run: npm publish --access public --provenance
+        working-directory: packages/native-window-ipc
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

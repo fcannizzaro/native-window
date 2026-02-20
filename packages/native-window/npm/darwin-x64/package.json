@@ -1,0 +1,16 @@
+{
+  "name": "@fcannizzaro/native-window-darwin-x64",
+  "version": "0.1.0",
+  "os": ["darwin"],
+  "cpu": ["x64"],
+  "main": "native-window.darwin-x64.node",
+  "files": ["native-window.darwin-x64.node"],
+  "description": "Native window addon for macOS x64",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fcannizzaro/native-window"
+  },
+  "engines": {
+    "node": ">= 10"
+  }
+}

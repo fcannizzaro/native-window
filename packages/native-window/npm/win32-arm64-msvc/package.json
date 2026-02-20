@@ -1,0 +1,16 @@
+{
+  "name": "@fcannizzaro/native-window-win32-arm64-msvc",
+  "version": "0.1.0",
+  "os": ["win32"],
+  "cpu": ["arm64"],
+  "main": "native-window.win32-arm64-msvc.node",
+  "files": ["native-window.win32-arm64-msvc.node"],
+  "description": "Native window addon for Windows ARM64",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fcannizzaro/native-window"
+  },
+  "engines": {
+    "node": ">= 10"
+  }
+}
