@@ -67,6 +67,11 @@ jobs:
         working-directory: packages/native-window
       - name: List platform packages
         run: ls -R packages/native-window/npm/
+      - name: Copy LICENSE to packages
+        run: |
+          for dir in packages/*/; do
+            cp LICENSE "$dir"
+          done
       - name: Publish platform packages
         run: |
           for dir in packages/native-window/npm/*/; do

@@ -2,7 +2,7 @@
   "name": "@fcannizzaro/native-window-tsdb",
   "version": "0.1.3",
   "description": "TanStack DB collection adapter for native-window IPC (alpha)",
-  "homepage": "https://native.fcannizzaro.com",
+  "homepage": "https://native-window.fcannizzaro.com",
   "author": {
     "name": "Francesco Saverio Cannizzaro (fcannizzaro)",
     "url": "https://fcannizzaro.com"
