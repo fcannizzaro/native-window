@@ -1,7 +1,23 @@
 {
   "name": "@fcannizzaro/native-window-ipc",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Typesafe IPC channels for native-window (alpha)",
+  "homepage": "https://native.fcannizzaro.com",
+  "author": {
+    "name": "Francesco Saverio Cannizzaro (fcannizzaro)",
+    "url": "https://fcannizzaro.com"
+  },
+  "funding": [{
+    "type": "patreon",
+    "url": "https://www.patreon.com/fcannizzaro"
+  }],
+  "bugs": {
+    "url": "https://github.com/fcannizzaro/native-window/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fcannizzaro/native-window/tree/main/packages/native-window-ipc"
+  },
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
