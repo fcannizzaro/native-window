@@ -6,6 +6,8 @@ on:
       - "packages/**"
   pull_request:
     branches: [main]
+    paths:
+      - "packages/**"
 permissions:
   contents: read
 jobs:
