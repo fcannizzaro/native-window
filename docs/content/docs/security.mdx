@@ -13,6 +13,8 @@ The webview is an **untrusted execution context**. Even if you control the HTML,
 
 Your host-side code should treat all data from the webview as untrusted input and validate it before acting on it.
 
+All native-layer security hardening — URL scheme blocking, Content Security Policy injection, trusted origin filtering, and WebView2 surface hardening — is always compiled in on both macOS and Windows. No build-time feature flags are required.
+
 ## Injection Risks
 
 ### HTML Injection via `loadHtml()`
@@ -96,6 +98,14 @@ const win = new NativeWindow({
 When set, a `<meta http-equiv="Content-Security-Policy">` tag is injected at document start — before any page scripts run. This restricts what the loaded content can do (e.g. block inline scripts, limit resource origins, prevent connections to unknown hosts).
 
 The CSP is injected on both macOS (via `WKUserScript`) and Windows (via `AddScriptToExecuteOnDocumentCreated`), and applies to all content including pages loaded via `loadUrl()` and `loadHtml()`.
+
+### WebView2 Surface Hardening (Windows)
+
+On Windows, the following WebView2 settings are always applied to reduce the attack surface:
+
+- **Context menus disabled** — right-click context menus are suppressed
+- **Status bar disabled** — the bottom status bar is hidden
+- **Built-in error page disabled** — the default WebView2 error page is suppressed
 
 ## IPC Security
 
@@ -231,7 +241,7 @@ const win = new NativeWindow({
 });
 ```
 
-When set, the native IPC handler extracts the origin from the source URL and checks it against the configured list **before** forwarding to the host. Messages from non-matching origins are silently dropped at the Rust layer — they never reach the `onMessage` callback or the typed channel.
+When set, the native IPC handler extracts the origin from the source URL and checks it against the configured list **before** forwarding to the host. Messages from non-matching origins are silently dropped at the Rust layer — they never reach the `onMessage` callback or the typed channel. This check is always compiled in on both macOS and Windows.
 
 This is independent of the IPC-layer `trustedOrigins` and operates at a lower level. Both can be used together for layered security.
 

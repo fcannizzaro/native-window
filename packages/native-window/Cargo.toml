@@ -56,15 +56,6 @@ windows = { version = "0.58", features = [
 ] }
 webview2-com = "0.33"
 
-[features]
-# Individual Windows security patches (opt-in, disabled by default).
-win-harden-settings = []   # Disable context menus, status bar, error page
-win-trusted-origins = []   # Native-layer IPC origin enforcement
-win-csp = []               # Content-Security-Policy meta tag injection
-win-scheme-block = []      # Block javascript:/file:/data:/blob: navigations
-# Convenience: enable all Windows security patches at once.
-windows-security = ["win-harden-settings", "win-trusted-origins", "win-csp", "win-scheme-block"]
-
 [build-dependencies]
 napi-build = "2"
 

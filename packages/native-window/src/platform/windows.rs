@@ -354,7 +354,6 @@ impl WindowsPlatform {
             .get(&id)
             .ok_or_else(|| napi::Error::from_reason(format!("Window {} not found", id)))?;
         let hwnd = entry.hwnd;
-        #[cfg(feature = "win-csp")]
         let csp = entry.csp.clone();
         let devtools = entry.devtools;
 
@@ -395,13 +394,10 @@ impl WindowsPlatform {
                             if let Ok(settings) = webview.Settings() {
                                 let _ = settings.SetAreDevToolsEnabled(devtools);
 
-                                // ── win-harden-settings: harden WebView2 surface ──
-                                #[cfg(feature = "win-harden-settings")]
-                                {
-                                    let _ = settings.SetAreDefaultContextMenusEnabled(false);
-                                    let _ = settings.SetIsStatusBarEnabled(false);
-                                    let _ = settings.SetIsBuiltInErrorPageEnabled(false);
-                                }
+                                // Harden WebView2 surface
+                                let _ = settings.SetAreDefaultContextMenusEnabled(false);
+                                let _ = settings.SetIsStatusBarEnabled(false);
+                                let _ = settings.SetIsBuiltInErrorPageEnabled(false);
                             }
 
                             // Add web message received handler
@@ -435,8 +431,7 @@ impl WindowsPlatform {
                                                 }
                                             };
 
-                                            // win-trusted-origins: check trusted origins (defense-in-depth)
-                                            #[cfg(feature = "win-trusted-origins")]
+                                            // Check trusted origins (defense-in-depth)
                                             if !crate::window_manager::is_origin_trusted(id, &source_url) {
                                                 return Ok(());
                                             }
@@ -479,8 +474,7 @@ impl WindowsPlatform {
                                 None,
                             );
 
-                            // win-csp: inject Content-Security-Policy meta tag if configured
-                            #[cfg(feature = "win-csp")]
+                            // Inject Content-Security-Policy meta tag if configured
                             if let Some(ref csp_value) = csp {
                                 let escaped_csp = csp_value.replace('\\', "\\\\").replace('\'', "\\'");
                                 let csp_script = format!(
@@ -517,20 +511,17 @@ impl WindowsPlatform {
                                                 ));
                                             });
 
-                                            // win-scheme-block: block dangerous URL schemes
+                                            // Block dangerous URL schemes
                                             // for non-programmatic navigations only.
-                                            #[cfg(feature = "win-scheme-block")]
-                                            {
-                                                let dominated = PROGRAMMATIC_NAV.with(|f| f.borrow_mut().remove(&nav_start_id));
-                                                if !dominated {
-                                                    let lower = url.to_lowercase();
-                                                    if lower.starts_with("javascript:")
-                                                        || lower.starts_with("file:")
-                                                        || lower.starts_with("data:")
-                                                        || lower.starts_with("blob:")
-                                                    {
-                                                        args.SetCancel(true)?;
-                                                    }
+                                            let dominated = PROGRAMMATIC_NAV.with(|f| f.borrow_mut().remove(&nav_start_id));
+                                            if !dominated {
+                                                let lower = url.to_lowercase();
+                                                if lower.starts_with("javascript:")
+                                                    || lower.starts_with("file:")
+                                                    || lower.starts_with("data:")
+                                                    || lower.starts_with("blob:")
+                                                {
+                                                    args.SetCancel(true)?;
                                                 }
                                             }
                                         }
