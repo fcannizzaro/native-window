@@ -62,12 +62,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: packages/native-window/artifacts
-          merge-multiple: true
-      - name: Move binaries
-        run: mv packages/native-window/artifacts/*.node packages/native-window/
-      - name: Prepare platform packages
-        run: bunx napi prepublish -t npm
+      - name: Move artifacts to platform packages
+        run: bunx napi artifacts
         working-directory: packages/native-window
+      - name: List platform packages
+        run: ls -R packages/native-window/npm/
       - name: Publish platform packages
         run: |
           for dir in packages/native-window/npm/*/; do
