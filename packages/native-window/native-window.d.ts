@@ -72,6 +72,24 @@ export interface WindowOptions {
    * @example `["myapp.com", "*.cdn.myapp.com"]`
    */
   allowedHosts?: string[];
+  /**
+   * Allow the webview to access the camera when requested.
+   * Default: false (all camera requests are denied).
+   */
+  allowCamera?: boolean;
+  /**
+   * Allow the webview to access the microphone when requested.
+   * Default: false (all microphone requests are denied).
+   */
+  allowMicrophone?: boolean;
+  /**
+   * Allow the webview to use the File System Access API
+   * (`showOpenFilePicker`, `showSaveFilePicker`, `showDirectoryPicker`).
+   * Only effective on Windows (WebView2). macOS WKWebView does not
+   * support the File System Access API.
+   * Default: false (all file system access requests are denied).
+   */
+  allowFileSystem?: boolean;
 }
 
 export class NativeWindow {

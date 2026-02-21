@@ -56,6 +56,10 @@ All options are optional. Pass them to the `NativeWindow` constructor:
 | `devtools` | `boolean` | `false` | Enable browser devtools |
 | `csp` | `string` | — | Content Security Policy injected at document start via a `<meta>` tag |
 | `trustedOrigins` | `string[]` | — | Native-layer IPC origin filter; messages from non-matching origins are silently dropped (defense-in-depth — see also `trustedOrigins` in [Typed IPC](/docs/ipc#trusted-origins)) |
+| `allowedHosts` | `string[]` | — | Restrict all navigations to matching hosts. Supports wildcard prefixes (`"*.example.com"` matches subdomains and the base domain). Internal URLs (`about:blank`, `loadHtml()` content) are always permitted. See [Security guide](/docs/security#navigation-host-restriction) |
+| `allowCamera` | `boolean` | `false` | Allow the webview to access the camera. All camera requests are denied by default. See [Security guide](/docs/security#permission-controls) |
+| `allowMicrophone` | `boolean` | `false` | Allow the webview to access the microphone. All microphone requests are denied by default. See [Security guide](/docs/security#permission-controls) |
+| `allowFileSystem` | `boolean` | `false` | Allow the webview to use the File System Access API (`showOpenFilePicker`, `showSaveFilePicker`, `showDirectoryPicker`). Windows only — macOS WKWebView does not support this API. See [Security guide](/docs/security#permission-controls) |
 
 ## Content Loading
 
@@ -140,6 +144,7 @@ win.postMessage("data from host");
 | `onPageLoad(cb)` | `(event: "started" \| "finished", url: string) => void` |
 | `onTitleChanged(cb)` | `(title: string) => void` |
 | `onReload(cb)` | `() => void` |
+| `onNavigationBlocked(cb)` | `(url: string) => void` |
 
 Example:
 
@@ -158,6 +163,21 @@ win.onResize((width, height) => {
 > **Security:** The raw `onMessage` callback does not filter by origin — all messages from the webview are delivered regardless of the source page URL. Use the `sourceUrl` parameter to validate the origin yourself, or use [Typed IPC](/docs/ipc) with `trustedOrigins` for automatic origin filtering.
 
 > **Note:** Calling `onClose()` more than once replaces the previous handler and emits a `console.warn`. Use a single handler with all your cleanup logic.
+
+### `onNavigationBlocked`
+
+Fired when a navigation is blocked by the [`allowedHosts`](#windowoptions) restriction. Use it to log blocked attempts or notify the user:
+
+```ts
+const win = new NativeWindow({
+  title: "My App",
+  allowedHosts: ["myapp.com", "*.cdn.myapp.com"],
+});
+
+win.onNavigationBlocked((url) => {
+  console.warn("Blocked navigation to:", url);
+});
+```
 
 ## Cookie Access
 

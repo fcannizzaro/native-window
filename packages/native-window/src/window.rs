@@ -4,7 +4,10 @@ use napi::JsFunction;
 use napi_derive::napi;
 
 use crate::options::WindowOptions;
-use crate::window_manager::{extract_origin, with_manager, Command, ALLOWED_HOSTS_MAP, TRUSTED_ORIGINS_MAP};
+use crate::window_manager::{
+    extract_origin, with_manager, Command, PermissionFlags,
+    ALLOWED_HOSTS_MAP, PERMISSIONS_MAP, TRUSTED_ORIGINS_MAP,
+};
 
 /// A native OS window with an embedded webview.
 #[napi]
@@ -51,6 +54,17 @@ impl NativeWindow {
                     });
                 }
             }
+            // Store permission flags for platform callbacks
+            // (separate thread-local so macOS WKUIDelegate / Windows PermissionRequested
+            // handlers can read while MANAGER is borrowed)
+            let permissions = PermissionFlags {
+                allow_camera: opts.allow_camera.unwrap_or(false),
+                allow_microphone: opts.allow_microphone.unwrap_or(false),
+                allow_file_system: opts.allow_file_system.unwrap_or(false),
+            };
+            PERMISSIONS_MAP.with(|p| {
+                p.borrow_mut().insert(id, permissions);
+            });
             mgr.push_command(Command::CreateWindow {
                 id,
                 options: opts,

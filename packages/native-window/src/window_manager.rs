@@ -3,6 +3,38 @@ use std::collections::HashMap;
 use crate::events::WindowEventHandlers;
 use crate::options::WindowOptions;
 
+// ── Permission flags ───────────────────────────────────────────
+
+/// Per-window permission flags for platform callbacks.
+/// All fields default to `false` (deny).
+#[derive(Debug, Clone, Copy)]
+pub struct PermissionFlags {
+    pub allow_camera: bool,
+    pub allow_microphone: bool,
+    #[allow(dead_code)] // Only read in Windows platform code
+    pub allow_file_system: bool,
+}
+
+impl Default for PermissionFlags {
+    fn default() -> Self {
+        Self {
+            allow_camera: false,
+            allow_microphone: false,
+            allow_file_system: false,
+        }
+    }
+}
+
+/// Read the permission flags for a window. Returns default (deny-all) if not found.
+pub fn get_permissions(window_id: u32) -> PermissionFlags {
+    PERMISSIONS_MAP.with(|p| {
+        p.borrow()
+            .get(&window_id)
+            .copied()
+            .unwrap_or_default()
+    })
+}
+
 /// Commands that can be sent to the window manager for execution during pump.
 pub enum Command {
     CreateWindow {
@@ -153,6 +185,9 @@ impl WindowManager {
         ALLOWED_HOSTS_MAP.with(|h| {
             h.borrow_mut().remove(&id);
         });
+        PERMISSIONS_MAP.with(|p| {
+            p.borrow_mut().remove(&id);
+        });
     }
 }
 
@@ -166,6 +201,10 @@ thread_local! {
     /// Stored outside MANAGER so the macOS NavigationDelegate can read them
     /// while MANAGER is mutably borrowed by pump_events.
     pub static ALLOWED_HOSTS_MAP: std::cell::RefCell<HashMap<u32, Vec<String>>> = std::cell::RefCell::new(HashMap::new());
+    /// Per-window permission flags for platform callbacks.
+    /// Stored outside MANAGER so macOS WKUIDelegate / Windows PermissionRequested
+    /// handlers can read them while MANAGER is mutably borrowed by pump_events.
+    pub static PERMISSIONS_MAP: std::cell::RefCell<HashMap<u32, PermissionFlags>> = std::cell::RefCell::new(HashMap::new());
     /// Buffer for IPC messages that arrive while MANAGER is already borrowed (reentrant calls).
     /// Each entry: (window_id, message, source_url).
     pub static PENDING_MESSAGES: std::cell::RefCell<Vec<(u32, String, String)>> = std::cell::RefCell::new(Vec::new());

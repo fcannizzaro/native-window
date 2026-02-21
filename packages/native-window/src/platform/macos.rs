@@ -10,13 +10,14 @@ use objc2_app_kit::{
     NSNormalWindowLevel, NSRunningApplication, NSWindow, NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_foundation::{
-    ns_string, NSDate, NSDefaultRunLoopMode, NSNotification, NSObjectProtocol, NSPoint, NSRect,
-    NSSize, NSString,
+    ns_string, NSArray, NSDate, NSDefaultRunLoopMode, NSNotification, NSObjectProtocol, NSPoint,
+    NSRect, NSSize, NSString, NSURL,
 };
 use objc2_web_kit::{
-    WKNavigation, WKNavigationAction, WKNavigationDelegate, WKScriptMessage,
-    WKScriptMessageHandler, WKUserContentController, WKUserScript, WKUserScriptInjectionTime,
-    WKWebView, WKWebViewConfiguration,
+    WKFrameInfo, WKMediaCaptureType, WKNavigation, WKNavigationAction, WKNavigationDelegate,
+    WKOpenPanelParameters, WKPermissionDecision, WKScriptMessage, WKScriptMessageHandler,
+    WKSecurityOrigin, WKUIDelegate, WKUserContentController, WKUserScript,
+    WKUserScriptInjectionTime, WKWebView, WKWebViewConfiguration, WKWindowFeatures,
 };
 
 use crate::events::WindowEventHandlers;
@@ -41,6 +42,8 @@ struct WindowEntry {
     _close_delegate: Retained<ProtocolObject<dyn NSWindowDelegate>>,
     /// Prevent the navigation delegate from being deallocated while the window is alive.
     _nav_delegate: Retained<ProtocolObject<dyn WKNavigationDelegate>>,
+    /// Prevent the UI delegate from being deallocated while the window is alive.
+    _ui_delegate: Retained<ProtocolObject<dyn WKUIDelegate>>,
     /// Last loaded content for reload support.
     loaded_content: Option<LoadedContent>,
 }
@@ -349,6 +352,88 @@ impl NavigationDelegate {
     }
 }
 
+// ── UI delegate (sandboxing) ─────────────────────────────────────
+// Handles permission requests (camera, microphone), popup blocking,
+// and file picker blocking. All permissions are denied by default;
+// per-window flags in PERMISSIONS_MAP control opt-in grants.
+
+define_class!(
+    #[unsafe(super(objc2::runtime::NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "WebViewUIDelegate"]
+    #[ivars = u32] // window id
+    pub(crate) struct WebViewUIDelegate;
+
+    unsafe impl NSObjectProtocol for WebViewUIDelegate {}
+
+    unsafe impl WKUIDelegate for WebViewUIDelegate {
+        // Block all popup / new-window requests by returning None.
+        #[unsafe(method_id(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]
+        fn create_web_view(
+            &self,
+            _web_view: &WKWebView,
+            _configuration: &WKWebViewConfiguration,
+            _navigation_action: &WKNavigationAction,
+            _window_features: &WKWindowFeatures,
+        ) -> Option<Retained<WKWebView>> {
+            None // deny all popups
+        }
+
+        // Block file picker dialogs by calling completion handler with nil.
+        // On Windows, allowFileSystem is enforced via the PermissionRequested handler.
+        // On macOS, WKWebView's NSOpenPanel integration is unreliable when driven
+        // from the delegate, so we always deny here for now.
+        #[unsafe(method(webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:))]
+        fn run_open_panel(
+            &self,
+            _web_view: &WKWebView,
+            _parameters: &WKOpenPanelParameters,
+            _frame: &WKFrameInfo,
+            completion_handler: &block2::DynBlock<dyn Fn(*mut NSArray<NSURL>)>,
+        ) {
+            completion_handler.call((std::ptr::null_mut(),));
+        }
+
+        // Handle media capture permission requests (camera/microphone).
+        // macOS 12+: WKMediaCaptureType::Camera/Microphone/CameraAndMicrophone
+        #[unsafe(method(webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:))]
+        fn request_media_capture(
+            &self,
+            _web_view: &WKWebView,
+            _origin: &WKSecurityOrigin,
+            _frame: &WKFrameInfo,
+            r#type: WKMediaCaptureType,
+            decision_handler: &block2::DynBlock<dyn Fn(WKPermissionDecision)>,
+        ) {
+            let window_id = *self.ivars();
+            let perms = crate::window_manager::get_permissions(window_id);
+
+            let allowed = match r#type {
+                WKMediaCaptureType::Camera => perms.allow_camera,
+                WKMediaCaptureType::Microphone => perms.allow_microphone,
+                WKMediaCaptureType::CameraAndMicrophone => {
+                    perms.allow_camera && perms.allow_microphone
+                }
+                _ => false,
+            };
+
+            let decision = if allowed {
+                WKPermissionDecision::Grant
+            } else {
+                WKPermissionDecision::Deny
+            };
+            decision_handler.call((decision,));
+        }
+    }
+);
+
+impl WebViewUIDelegate {
+    fn new(mtm: MainThreadMarker, window_id: u32) -> Retained<Self> {
+        let delegate = Self::alloc(mtm).set_ivars(window_id);
+        unsafe { msg_send![super(delegate), init] }
+    }
+}
+
 // ── Edit menu ────────────────────────────────────────────────────
 // Set up a minimal main menu with an Edit submenu so that standard
 // keyboard shortcuts (Cmd+C/V/X/A/Z) work inside the WKWebView
@@ -555,6 +640,12 @@ impl MacOSPlatform {
         let config =
             unsafe { WKWebViewConfiguration::new(self.mtm) };
 
+        // Harden WKPreferences: block window.open() from scripts
+        unsafe {
+            let prefs: Retained<objc2::runtime::AnyObject> = msg_send![&config, preferences];
+            let _: () = msg_send![&prefs, setJavaScriptCanOpenWindowsAutomatically: false];
+        }
+
         // Set up IPC handler
         let content_controller = unsafe { config.userContentController() };
         let ipc_handler = IPCMessageHandler::new(self.mtm, id);
@@ -640,6 +731,14 @@ impl MacOSPlatform {
             webview.setNavigationDelegate(Some(&nav_delegate_proto));
         }
 
+        // Set UI delegate for permission handling, popup blocking, and file picker blocking
+        let ui_delegate = WebViewUIDelegate::new(self.mtm, id);
+        let ui_delegate_proto: Retained<ProtocolObject<dyn WKUIDelegate>> =
+            ProtocolObject::from_retained(ui_delegate);
+        unsafe {
+            webview.setUIDelegate(Some(&ui_delegate_proto));
+        }
+
         if visible {
             window.makeKeyAndOrderFront(None);
         }
@@ -653,6 +752,7 @@ impl MacOSPlatform {
                 webview,
                 _close_delegate: close_delegate_proto,
                 _nav_delegate: nav_delegate_proto,
+                _ui_delegate: ui_delegate_proto,
                 loaded_content: None,
             },
         );

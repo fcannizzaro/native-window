@@ -403,6 +403,10 @@ impl WindowsPlatform {
                                 let _ = settings.SetAreDefaultContextMenusEnabled(false);
                                 let _ = settings.SetIsStatusBarEnabled(false);
                                 let _ = settings.SetIsBuiltInErrorPageEnabled(false);
+
+                                // Disable host objects to prevent native object injection.
+                                // This library uses postMessage IPC, not host objects.
+                                let _ = settings.SetAreHostObjectsAllowed(false);
                             }
 
                             // Add web message received handler
@@ -591,6 +595,68 @@ impl WindowsPlatform {
                                     }),
                                 ),
                                 &mut nav_completed_token,
+                            );
+
+                            // ── Permission request handling (sandboxing) ──────────
+                            // Deny camera, microphone, and all other
+                            // permissions by default. Only grant if explicitly allowed
+                            // via the per-window PermissionFlags.
+                            let perm_id = id;
+                            let mut perm_token = std::mem::zeroed();
+                            let _ = webview.add_PermissionRequested(
+                                &webview2_com::PermissionRequestedEventHandler::create(
+                                    Box::new(move |_webview, args| {
+                                        if let Some(args) = args {
+                                            let kind = args.PermissionKind()?;
+                                            let perms = crate::window_manager::get_permissions(perm_id);
+
+                                            let state = match kind {
+                                                COREWEBVIEW2_PERMISSION_KIND_CAMERA => {
+                                                    if perms.allow_camera {
+                                                        COREWEBVIEW2_PERMISSION_STATE_ALLOW
+                                                    } else {
+                                                        COREWEBVIEW2_PERMISSION_STATE_DENY
+                                                    }
+                                                }
+                                                COREWEBVIEW2_PERMISSION_KIND_MICROPHONE => {
+                                                    if perms.allow_microphone {
+                                                        COREWEBVIEW2_PERMISSION_STATE_ALLOW
+                                                    } else {
+                                                        COREWEBVIEW2_PERMISSION_STATE_DENY
+                                                    }
+                                                }
+                                                COREWEBVIEW2_PERMISSION_KIND_FILE_READ_WRITE => {
+                                                    if perms.allow_file_system {
+                                                        COREWEBVIEW2_PERMISSION_STATE_ALLOW
+                                                    } else {
+                                                        COREWEBVIEW2_PERMISSION_STATE_DENY
+                                                    }
+                                                }
+                                                // Deny everything else: notifications, clipboard, sensors, etc.
+                                                _ => COREWEBVIEW2_PERMISSION_STATE_DENY,
+                                            };
+
+                                            args.SetState(state)?;
+                                        }
+                                        Ok(())
+                                    }),
+                                ),
+                                &mut perm_token,
+                            );
+
+                            // ── Popup / new-window blocking ──────────────────────
+                            // Block all popup and new-window requests unconditionally.
+                            let mut new_window_token = std::mem::zeroed();
+                            let _ = webview.add_NewWindowRequested(
+                                &webview2_com::NewWindowRequestedEventHandler::create(
+                                    Box::new(move |_webview, args| {
+                                        if let Some(args) = args {
+                                            args.SetHandled(true)?; // consume the event, no window opens
+                                        }
+                                        Ok(())
+                                    }),
+                                ),
+                                &mut new_window_token,
                             );
 
                             // Pass controller and webview back via thread-local.
@@ -807,6 +873,9 @@ impl WindowsPlatform {
         });
         crate::window_manager::ALLOWED_HOSTS_MAP.with(|h| {
             h.borrow_mut().remove(&id);
+        });
+        crate::window_manager::PERMISSIONS_MAP.with(|p| {
+            p.borrow_mut().remove(&id);
         });
         LOADED_HTML_WIN.with(|h| {
             h.borrow_mut().remove(&id);

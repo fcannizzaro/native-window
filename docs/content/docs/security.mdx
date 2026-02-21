@@ -74,6 +74,33 @@ win.loadUrl("blob:https://example.com/uuid"); // throws Error
 
 Additionally, navigations initiated from within the webview (e.g. clicking a link) are blocked for `javascript:`, `file:`, `data:`, and `blob:` schemes on both macOS and Windows. This prevents a compromised page from navigating to dangerous URLs.
 
+### Navigation Host Restriction
+
+The `allowedHosts` option in `WindowOptions` restricts **all** navigations — `loadUrl()`, link clicks, form submissions, and redirects — to URLs whose host matches one of the specified patterns:
+
+```ts
+const win = new NativeWindow({
+  title: "My App",
+  allowedHosts: ["myapp.com", "*.cdn.myapp.com"],
+});
+```
+
+Pattern matching is case-insensitive:
+- **Exact:** `"example.com"` matches only `example.com`
+- **Wildcard:** `"*.example.com"` matches any subdomain of `example.com` (`sub.example.com`, `a.b.example.com`) **and** `example.com` itself
+
+Internal navigations (`about:blank`, `https://native-window.local/`, and `loadHtml()` content) are always permitted regardless of this setting. When `allowedHosts` is unset or empty, all hosts are allowed.
+
+Use `onNavigationBlocked` to observe blocked attempts:
+
+```ts
+win.onNavigationBlocked((url) => {
+  console.warn("Blocked navigation to:", url);
+});
+```
+
+> **Tip:** Combine `allowedHosts` with a [Content Security Policy](#content-security-policy) for defense-in-depth — CSP restricts what a loaded page can fetch and execute, while `allowedHosts` restricts where the webview can navigate.
+
 ### `loadHtml()` Base URL
 
 On macOS, content loaded via `loadHtml()` now uses a synthetic base URL (`https://native-window.local/`) instead of a null origin. This provides a consistent, non-null origin for the loaded content. On Windows, `loadHtml()` still uses `about:blank` as the origin (WebView2 limitation).
@@ -106,6 +133,53 @@ On Windows, the following WebView2 settings are always applied to reduce the att
 - **Context menus disabled** — right-click context menus are suppressed
 - **Status bar disabled** — the bottom status bar is hidden
 - **Built-in error page disabled** — the default WebView2 error page is suppressed
+
+## Webview Sandboxing
+
+The webview runs with a **deny-by-default** security posture. Permissions, popups, and file pickers are all blocked unless explicitly allowed. This limits the attack surface of loaded content — even if a page is compromised, it cannot access device hardware, open new windows, or trigger file selection dialogs.
+
+### Permission Controls
+
+Camera and microphone access are denied by default. Opt in per-window using `WindowOptions`:
+
+```ts
+const win = new NativeWindow({
+  title: "Video Chat",
+  allowCamera: true,
+  allowMicrophone: true,
+});
+```
+
+| Option | Default | What it controls |
+|--------|---------|-----------------|
+| `allowCamera` | `false` | Camera / video capture |
+| `allowMicrophone` | `false` | Microphone / audio capture |
+| `allowFileSystem` | `false` | File System Access API (`showOpenFilePicker`, `showSaveFilePicker`, `showDirectoryPicker`) — Windows only |
+
+When both camera and microphone are requested simultaneously (e.g. `getUserMedia({ video: true, audio: true })`), **both** flags must be `true` for the request to be granted.
+
+Platform implementation details:
+
+- **macOS** — Camera and microphone requests are handled by the WKUIDelegate.
+- **Windows** — All permissions are handled via WebView2's `PermissionRequested` event. The `allowFileSystem` flag controls the `FILE_READ_WRITE` permission kind for the File System Access API. All other unrecognized permission types (notifications, clipboard read/write, sensors, MIDI, etc.) are unconditionally denied.
+
+> **Note:** `allowFileSystem` has no effect on macOS — WKWebView does not support the File System Access API.
+
+### Popup Blocking
+
+All popup and new-window requests (`window.open()`, `target="_blank"` links) are **unconditionally blocked** on both platforms. There is no opt-in flag — popups are never allowed.
+
+- **macOS** — The WKUIDelegate's `createWebViewWithConfiguration` returns `null`, preventing any new webview from being created.
+- **Windows** — The WebView2 `NewWindowRequested` handler calls `SetHandled(true)`, consuming the event so no window opens.
+
+### File Picker Blocking
+
+File picker dialogs triggered by `<input type="file">` are **unconditionally blocked**. The dialog is silently suppressed — no file selection UI appears.
+
+- **macOS** — The WKUIDelegate's `runOpenPanelWithParameters` completes with `null`, dismissing the picker immediately.
+- **Windows** — File picker dialogs are suppressed by WebView2's default configuration.
+
+> **Tip:** Combine permission controls with a [Content Security Policy](#content-security-policy) for layered defense. For example, `"default-src 'self'; media-src 'none'"` blocks media loading at the content level, while `allowCamera: false` blocks it at the OS permission level.
 
 ## IPC Security
 
