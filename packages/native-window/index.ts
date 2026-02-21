@@ -220,13 +220,10 @@ export class NativeWindow {
   get unsafe(): UnsafeNamespace {
     this._ensureOpen();
     if (!this._unsafe) {
-      // Capture `this` to re-check _closed on each call, preventing
-      // use-after-close via a previously cached UnsafeNamespace reference.
-      const self = this;
       this._unsafe = {
-        evaluateJs(script: string): void {
-          self._ensureOpen();
-          self._native.evaluateJs(script);
+        evaluateJs: (script: string): void => {
+          this._ensureOpen();
+          this._native.evaluateJs(script);
         },
       };
     }
@@ -359,9 +356,7 @@ export class NativeWindow {
     this._native.onBlur(callback);
   }
 
-  onPageLoad(
-    callback: (event: "started" | "finished", url: string) => void,
-  ): void {
+  onPageLoad(callback: (event: "started" | "finished", url: string) => void): void {
     this._ensureOpen();
     this._native.onPageLoad(callback);
   }
@@ -489,13 +484,16 @@ export function run(intervalMs = 16): () => void {
 // ---------------------------------------------------------------------------
 
 /**
- * Escape a string for safe embedding inside a JavaScript string literal.
- * Handles backslashes, quotes, backticks, template expressions, newlines,
- * null bytes, closing `</script>` tags, and Unicode line/paragraph
+ * Escape a string for safe embedding inside a JavaScript **double-quoted**
+ * string literal. Handles backslashes, double quotes, newlines, carriage
+ * returns, null bytes, closing `</script>` tags, and Unicode line/paragraph
  * separators (U+2028, U+2029).
  *
- * @security Use this when interpolating untrusted input into
- * {@link NativeWindow.unsafe} `evaluateJs()` calls to prevent script injection.
+ * @security Backticks and `${` template expressions are **not** escaped, so
+ * the output must only be interpolated into double-quoted (`"…"`) string
+ * literals — never into single-quoted or template literals. Use this when
+ * interpolating untrusted input into {@link NativeWindow.unsafe}
+ * `evaluateJs()` calls to prevent script injection.
  *
  * @example
  * ```ts
@@ -506,16 +504,7 @@ export function run(intervalMs = 16): () => void {
  * ```
  */
 export function sanitizeForJs(input: string): string {
-  return input
-    .replace(/\\/g, "\\\\")
-    .replace(/'/g, "\\'")
-    .replace(/"/g, '\\"')
-    .replace(/`/g, "\\`")
-    .replace(/\$\{/g, "\\${")
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r")
-    .replace(/\0/g, "\\0")
-    .replace(/\u2028/g, "\\u2028")
-    .replace(/\u2029/g, "\\u2029")
+  return JSON.stringify(input)
+    .slice(1, -1)
     .replace(/<\/script>/gi, "<\\/script>");
 }
