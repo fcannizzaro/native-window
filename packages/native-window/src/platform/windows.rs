@@ -317,7 +317,7 @@ impl WindowsPlatform {
                 height,
                 None,
                 None,
-                GetModuleHandleW(None).unwrap_or_default(),
+                Some(GetModuleHandleW(None).unwrap_or_default()),
                 None,
             )
             .map_err(|e| napi::Error::from_reason(format!("CreateWindow failed: {}", e)))?
@@ -736,7 +736,7 @@ impl WindowsPlatform {
             };
             SetWindowPos(
                 entry.hwnd,
-                insert_after,
+                Some(insert_after),
                 0,
                 0,
                 0,
