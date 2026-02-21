@@ -67,6 +67,15 @@ jobs:
         working-directory: packages/native-window
       - name: List platform packages
         run: ls -R packages/native-window/npm/
+      - name: Build native-window-ipc
+        run: bun run build
+        working-directory: packages/native-window-ipc
+      - name: Build native-window-ipc-react
+        run: bun run build
+        working-directory: packages/native-window-ipc-react
+      - name: Build native-window-tsdb
+        run: bun run build
+        working-directory: packages/native-window-tsdb
       - name: Copy LICENSE to packages
         run: |
           for dir in packages/*/; do
@@ -87,5 +96,15 @@ jobs:
       - name: Publish
         run: npm publish --access public --provenance
         working-directory: packages/native-window-ipc
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish
+        run: npm publish --access public --provenance
+        working-directory: packages/native-window-ipc-react
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish
+        run: npm publish --access public --provenance
+        working-directory: packages/native-window-tsdb
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
