@@ -54,6 +54,16 @@ pub struct WindowOptions {
     /// This is a defense-in-depth mechanism. For application-level origin
     /// filtering, use the `trustedOrigins` option in `createChannel()`.
     pub trusted_origins: Option<Vec<String>>,
+    /// Allowed hosts for navigation restriction.
+    /// When set and non-empty, ALL navigations (programmatic and user-initiated)
+    /// are restricted to URLs whose host matches one of these patterns.
+    /// Supports wildcard prefixes: `"*.example.com"` matches any subdomain of
+    /// example.com (and example.com itself). When unset or empty, all hosts
+    /// are allowed.
+    ///
+    /// Internal navigations (`about:blank`, `https://native-window.local/`) are
+    /// always permitted regardless of this setting.
+    pub allowed_hosts: Option<Vec<String>>,
 }
 
 impl Default for WindowOptions {
@@ -76,6 +86,7 @@ impl Default for WindowOptions {
             devtools: None,
             csp: None,
             trusted_origins: None,
+            allowed_hosts: None,
         }
     }
 }

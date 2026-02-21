@@ -29,6 +29,9 @@ pub type ReloadCallback = ThreadsafeFunction<(), ErrorStrategy::Fatal>;
 /// The payload is a JSON array of cookie objects.
 pub type CookiesCallback = ThreadsafeFunction<String, ErrorStrategy::Fatal>;
 
+/// Callback for blocked navigation events: (url).
+pub type NavigationBlockedCallback = ThreadsafeFunction<String, ErrorStrategy::Fatal>;
+
 /// Stored event handlers for a window.
 pub struct WindowEventHandlers {
     pub on_message: Option<MessageCallback>,
@@ -41,6 +44,7 @@ pub struct WindowEventHandlers {
     pub on_title_changed: Option<TitleChangedCallback>,
     pub on_reload: Option<ReloadCallback>,
     pub on_cookies: Option<CookiesCallback>,
+    pub on_navigation_blocked: Option<NavigationBlockedCallback>,
 }
 
 impl WindowEventHandlers {
@@ -56,6 +60,7 @@ impl WindowEventHandlers {
             on_title_changed: None,
             on_reload: None,
             on_cookies: None,
+            on_navigation_blocked: None,
         }
     }
 }

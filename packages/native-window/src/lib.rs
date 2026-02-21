@@ -14,8 +14,8 @@ pub use runtime::*;
 use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use window_manager::{
     is_origin_trusted, with_manager, PENDING_BLURS, PENDING_CLOSES, PENDING_FOCUSES,
-    PENDING_MESSAGES, PENDING_MOVES, PENDING_PAGE_LOADS, PENDING_RELOADS,
-    PENDING_RESIZE_CALLBACKS,
+    PENDING_MESSAGES, PENDING_MOVES, PENDING_NAVIGATION_BLOCKED, PENDING_PAGE_LOADS,
+    PENDING_RELOADS, PENDING_RESIZE_CALLBACKS,
 };
 
 /// Initialize the native window system.
@@ -248,6 +248,17 @@ fn flush_pending_callbacks(
                     (event_type, url),
                     ThreadsafeFunctionCallMode::NonBlocking,
                 );
+            }
+        }
+    }
+
+    // Flush any navigation-blocked events that were deferred during pump_events
+    let pending_nav_blocked: Vec<(u32, String)> =
+        PENDING_NAVIGATION_BLOCKED.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    for (window_id, url) in pending_nav_blocked {
+        if let Some(handlers) = event_handlers.get(&window_id) {
+            if let Some(ref cb) = handlers.on_navigation_blocked {
+                cb.call(url, ThreadsafeFunctionCallMode::NonBlocking);
             }
         }
     }

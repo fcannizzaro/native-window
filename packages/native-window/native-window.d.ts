@@ -57,6 +57,21 @@ export interface WindowOptions {
    * @example `["https://myapp.com", "https://cdn.myapp.com"]`
    */
   trustedOrigins?: string[];
+  /**
+   * Allowed hosts for navigation restriction.
+   * When set and non-empty, ALL navigations (including `loadUrl()`, link
+   * clicks, form submissions, and redirects) are restricted to URLs whose
+   * host matches one of these patterns.
+   *
+   * Supports wildcard prefixes: `"*.example.com"` matches any subdomain
+   * of `example.com` and `example.com` itself.
+   *
+   * Internal navigations (`about:blank`, `loadHtml()` content) are always
+   * permitted. When unset or empty, all hosts are allowed.
+   *
+   * @example `["myapp.com", "*.cdn.myapp.com"]`
+   */
+  allowedHosts?: string[];
 }
 
 export class NativeWindow {
@@ -103,6 +118,7 @@ export class NativeWindow {
   ): void;
   onTitleChanged(callback: (title: string) => void): void;
   onReload(callback: () => void): void;
+  onNavigationBlocked(callback: (url: string) => void): void;
 
   // Cookie access
   getCookies(url?: string): void;

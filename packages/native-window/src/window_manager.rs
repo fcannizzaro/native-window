@@ -96,10 +96,6 @@ pub struct WindowManager {
     pub next_id: u32,
     pub command_queue: Vec<Command>,
     pub event_handlers: HashMap<u32, WindowEventHandlers>,
-    /// Per-window trusted origins for IPC message filtering.
-    /// When an entry exists and the Vec is non-empty, only IPC messages
-    /// from matching origins are forwarded to JS.
-    pub trusted_origins: HashMap<u32, Vec<String>>,
     pub initialized: bool,
     #[cfg(target_os = "macos")]
     pub platform: Option<super::platform::macos::MacOSPlatform>,
@@ -117,7 +113,6 @@ impl WindowManager {
             next_id: 1,
             command_queue: Vec::new(),
             event_handlers: HashMap::new(),
-            trusted_origins: HashMap::new(),
             initialized: false,
             platform: None,
         }
@@ -148,16 +143,29 @@ impl WindowManager {
         std::mem::take(&mut self.command_queue)
     }
 
-    /// Remove event handlers and trusted origins for a closed window to prevent memory leaks.
+    /// Remove event handlers and security config for a closed window to prevent memory leaks.
     #[allow(dead_code)] // Used by macOS platform, not by Windows
     pub fn remove_event_handlers(&mut self, id: u32) {
         self.event_handlers.remove(&id);
-        self.trusted_origins.remove(&id);
+        TRUSTED_ORIGINS_MAP.with(|o| {
+            o.borrow_mut().remove(&id);
+        });
+        ALLOWED_HOSTS_MAP.with(|h| {
+            h.borrow_mut().remove(&id);
+        });
     }
 }
 
 thread_local! {
     pub static MANAGER: std::cell::RefCell<WindowManager> = std::cell::RefCell::new(WindowManager::new());
+    /// Per-window trusted origins for IPC message filtering.
+    /// Stored outside MANAGER so the macOS NavigationDelegate / IPC handler
+    /// can read them while MANAGER is mutably borrowed by pump_events.
+    pub static TRUSTED_ORIGINS_MAP: std::cell::RefCell<HashMap<u32, Vec<String>>> = std::cell::RefCell::new(HashMap::new());
+    /// Per-window allowed hosts for navigation restriction.
+    /// Stored outside MANAGER so the macOS NavigationDelegate can read them
+    /// while MANAGER is mutably borrowed by pump_events.
+    pub static ALLOWED_HOSTS_MAP: std::cell::RefCell<HashMap<u32, Vec<String>>> = std::cell::RefCell::new(HashMap::new());
     /// Buffer for IPC messages that arrive while MANAGER is already borrowed (reentrant calls).
     /// Each entry: (window_id, message, source_url).
     pub static PENDING_MESSAGES: std::cell::RefCell<Vec<(u32, String, String)>> = std::cell::RefCell::new(Vec::new());
@@ -178,6 +186,8 @@ thread_local! {
     /// Buffer for page load events deferred during pump_events: (window_id, event_type, url).
     /// event_type is "started" or "finished".
     pub static PENDING_PAGE_LOADS: std::cell::RefCell<Vec<(u32, String, String)>> = std::cell::RefCell::new(Vec::new());
+    /// Buffer for navigation-blocked events deferred during pump_events: (window_id, url).
+    pub static PENDING_NAVIGATION_BLOCKED: std::cell::RefCell<Vec<(u32, String)>> = std::cell::RefCell::new(Vec::new());
 }
 
 /// Execute a closure with mutable access to the global window manager.
@@ -215,22 +225,104 @@ pub fn extract_origin(url: &str) -> Option<String> {
 ///   - No trusted origins are configured for this window (allow all), or
 ///   - The source URL's origin matches one of the trusted origins.
 pub fn is_origin_trusted(window_id: u32, source_url: &str) -> bool {
-    MANAGER.with(|m| {
-        match m.try_borrow() {
-            Ok(mgr) => {
-                if let Some(origins) = mgr.trusted_origins.get(&window_id) {
-                    if origins.is_empty() {
-                        return true;
-                    }
-                    match extract_origin(source_url) {
-                        Some(origin) => origins.contains(&origin),
-                        None => false, // Malformed URL = untrusted
-                    }
-                } else {
-                    true // No trusted_origins configured = allow all
-                }
+    TRUSTED_ORIGINS_MAP.with(|o| {
+        let map = o.borrow();
+        if let Some(origins) = map.get(&window_id) {
+            if origins.is_empty() {
+                return true;
             }
-            Err(_) => true, // Can't borrow = allow (deferred messages checked later)
+            match extract_origin(source_url) {
+                Some(origin) => origins.contains(&origin),
+                None => false, // Malformed URL = untrusted
+            }
+        } else {
+            true // No trusted_origins configured = allow all
+        }
+    })
+}
+
+// ── Navigation host restriction ────────────────────────────────
+
+/// Extract the host (without port) from a URL string.
+/// Returns `None` for URLs without a host (e.g., `about:blank`, `data:` URIs).
+fn extract_host(url: &str) -> Option<&str> {
+    let scheme_end = url.find("://")?;
+    let rest = &url[scheme_end + 3..];
+    // Strip userinfo (user:pass@) if present
+    let after_at = match rest.find('@') {
+        Some(i) => &rest[i + 1..],
+        None => rest,
+    };
+    // Find end of host (before /, ?, #, or end)
+    let host_end = after_at
+        .find(|c: char| c == '/' || c == '?' || c == '#')
+        .unwrap_or(after_at.len());
+    let host_port = &after_at[..host_end];
+    if host_port.is_empty() {
+        return None;
+    }
+    // Strip port — handle IPv6 [::1]:port
+    let host = if host_port.starts_with('[') {
+        let bracket_end = host_port.find(']').unwrap_or(host_port.len());
+        &host_port[..=bracket_end]
+    } else {
+        match host_port.rfind(':') {
+            Some(i) => &host_port[..i],
+            None => host_port,
+        }
+    };
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
+    }
+}
+
+/// Check if a URL's host is permitted by the window's `allowedHosts` list.
+/// Returns `true` if:
+///   - No `allowed_hosts` are configured for this window (allow all)
+///   - The URL is an internal URL (`about:blank`, `native-window.local`)
+///   - The URL's host matches one of the allowed patterns
+///
+/// Pattern matching (case-insensitive):
+///   - Exact: `"example.com"` matches only `example.com`
+///   - Wildcard: `"*.example.com"` matches `sub.example.com`,
+///     `a.b.example.com`, AND `example.com` itself
+pub fn is_host_allowed(window_id: u32, url: &str) -> bool {
+    // Internal URLs are always allowed
+    let lower = url.to_lowercase();
+    if lower.starts_with("about:") || lower.contains("native-window.local") {
+        return true;
+    }
+
+    ALLOWED_HOSTS_MAP.with(|h| {
+        let map = h.borrow();
+        if let Some(hosts) = map.get(&window_id) {
+            if hosts.is_empty() {
+                return true;
+            }
+            match extract_host(url) {
+                Some(host) => {
+                    let host_lower = host.to_lowercase();
+                    hosts.iter().any(|pattern| {
+                        let p = pattern.to_lowercase();
+                        if let Some(suffix) = p.strip_prefix('*') {
+                            // "*.example.com" → suffix = ".example.com"
+                            // Match: host ends with ".example.com"
+                            //    OR: host equals "example.com" (strip leading dot)
+                            host_lower.ends_with(suffix)
+                                || suffix
+                                    .strip_prefix('.')
+                                    .map_or(false, |bare| host_lower == bare)
+                        } else {
+                            host_lower == p
+                        }
+                    })
+                }
+                None => false, // No host extractable = blocked
+            }
+        } else {
+            true // No allowed_hosts configured = allow all
         }
     })
 }

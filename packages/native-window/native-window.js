@@ -37,7 +37,7 @@ const tryRequire = (id) => {
   }
 };
 
-const nativeBinding = tryRequire(entry.pkg) ?? tryRequire(`./${entry.file}`);
+const nativeBinding = tryRequire(`./${entry.file}`) ?? tryRequire(entry.pkg);
 
 if (!nativeBinding) {
   throw new Error(

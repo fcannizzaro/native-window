@@ -238,28 +238,48 @@ define_class!(
             }
 
             // Block dangerous URL schemes (javascript:, file:, data:, blob:)
-            let should_block = unsafe {
+            // and enforce allowedHosts navigation restriction.
+            let url_string: Option<String> = unsafe {
                 let request: *const objc2::runtime::AnyObject = msg_send![navigation_action, request];
                 if !request.is_null() {
                     let url: *const objc2::runtime::AnyObject = msg_send![request, URL];
                     if !url.is_null() {
-                        let scheme: Option<Retained<NSString>> = msg_send![url, scheme];
-                        if let Some(scheme) = scheme {
-                            let s = scheme.to_string().to_lowercase();
-                            s == "javascript" || s == "file" || s == "data" || s == "blob"
-                        } else {
-                            false
-                        }
+                        let abs: Option<Retained<NSString>> = msg_send![url, absoluteString];
+                        abs.map(|s| s.to_string())
                     } else {
-                        false
+                        None
                     }
                 } else {
-                    false
+                    None
                 }
             };
 
-            if should_block {
+            // Check dangerous URL schemes
+            let should_block_scheme = url_string.as_ref().map_or(false, |u| {
+                let lower = u.to_lowercase();
+                lower.starts_with("javascript:")
+                    || lower.starts_with("file:")
+                    || lower.starts_with("data:")
+                    || lower.starts_with("blob:")
+            });
+
+            if should_block_scheme {
                 decision_handler.call((objc2_web_kit::WKNavigationActionPolicy::Cancel,));
+                return;
+            }
+
+            // Check allowedHosts restriction
+            let host_blocked = url_string
+                .as_ref()
+                .map_or(false, |u| !crate::window_manager::is_host_allowed(window_id, u));
+
+            if host_blocked {
+                decision_handler.call((objc2_web_kit::WKNavigationActionPolicy::Cancel,));
+                if let Some(url) = url_string {
+                    crate::window_manager::PENDING_NAVIGATION_BLOCKED.with(|p| {
+                        p.borrow_mut().push((window_id, url));
+                    });
+                }
             } else {
                 decision_handler.call((objc2_web_kit::WKNavigationActionPolicy::Allow,));
             }

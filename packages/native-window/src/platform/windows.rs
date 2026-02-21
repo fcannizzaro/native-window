@@ -511,6 +511,15 @@ impl WindowsPlatform {
                                                 ));
                                             });
 
+                                            // Check allowedHosts restriction — applies to ALL navigations
+                                            if !crate::window_manager::is_host_allowed(nav_start_id, &url) {
+                                                args.SetCancel(true)?;
+                                                crate::window_manager::PENDING_NAVIGATION_BLOCKED.with(|p| {
+                                                    p.borrow_mut().push((nav_start_id, url));
+                                                });
+                                                return Ok(());
+                                            }
+
                                             // Block dangerous URL schemes
                                             // for non-programmatic navigations only.
                                             let dominated = PROGRAMMATIC_NAV.with(|f| f.borrow_mut().remove(&nav_start_id));
@@ -773,11 +782,14 @@ impl WindowsPlatform {
         unsafe {
             let _ = DestroyWindow(entry.hwnd);
         }
-        // Clean up trusted origins (these remain in MANAGER during Phase 2).
+        // Clean up security config stored in separate thread-locals.
         // Event handler cleanup is done by the caller (process_command)
         // because during Phase 2, MANAGER's event_handlers are extracted.
-        crate::window_manager::with_manager(|mgr| {
-            mgr.trusted_origins.remove(&id);
+        crate::window_manager::TRUSTED_ORIGINS_MAP.with(|o| {
+            o.borrow_mut().remove(&id);
+        });
+        crate::window_manager::ALLOWED_HOSTS_MAP.with(|h| {
+            h.borrow_mut().remove(&id);
         });
         Ok(())
     }

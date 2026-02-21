@@ -4,7 +4,7 @@ use napi::JsFunction;
 use napi_derive::napi;
 
 use crate::options::WindowOptions;
-use crate::window_manager::{with_manager, Command};
+use crate::window_manager::{with_manager, Command, ALLOWED_HOSTS_MAP, TRUSTED_ORIGINS_MAP};
 
 /// A native OS window with an embedded webview.
 #[napi]
@@ -28,9 +28,21 @@ impl NativeWindow {
             }
             let id = mgr.allocate_id()?;
             // Store trusted origins for native-layer IPC filtering
+            // (separate thread-local so macOS delegates can read while MANAGER is borrowed)
             if let Some(ref origins) = opts.trusted_origins {
                 if !origins.is_empty() {
-                    mgr.trusted_origins.insert(id, origins.clone());
+                    TRUSTED_ORIGINS_MAP.with(|o| {
+                        o.borrow_mut().insert(id, origins.clone());
+                    });
+                }
+            }
+            // Store allowed hosts for navigation restriction
+            // (separate thread-local so macOS delegates can read while MANAGER is borrowed)
+            if let Some(ref hosts) = opts.allowed_hosts {
+                if !hosts.is_empty() {
+                    ALLOWED_HOSTS_MAP.with(|h| {
+                        h.borrow_mut().insert(id, hosts.clone());
+                    });
                 }
             }
             mgr.push_command(Command::CreateWindow {
@@ -448,6 +460,23 @@ impl NativeWindow {
         with_manager(|mgr| {
             if let Some(handlers) = mgr.event_handlers.get_mut(&self.id) {
                 handlers.on_reload = Some(tsfn);
+            }
+        });
+        Ok(())
+    }
+
+    /// Register a handler for blocked navigation events.
+    /// Fired when a navigation is blocked by the `allowedHosts` restriction.
+    #[napi(ts_args_type = "callback: (url: string) => void")]
+    pub fn on_navigation_blocked(&self, callback: JsFunction) -> Result<()> {
+        let tsfn: ThreadsafeFunction<String, ErrorStrategy::Fatal> =
+            callback.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<String>| {
+                ctx.env.create_string(ctx.value.as_str()).map(|v| vec![v])
+            })?;
+
+        with_manager(|mgr| {
+            if let Some(handlers) = mgr.event_handlers.get_mut(&self.id) {
+                handlers.on_navigation_blocked = Some(tsfn);
             }
         });
         Ok(())

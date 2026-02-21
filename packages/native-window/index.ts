@@ -371,6 +371,23 @@ export class NativeWindow {
     this._native.onReload(callback);
   }
 
+  /**
+   * Register a handler for blocked navigation events.
+   * Fired when a navigation is blocked by the {@link WindowOptions.allowedHosts}
+   * restriction. Receives the URL that was blocked.
+   *
+   * @example
+   * ```ts
+   * win.onNavigationBlocked((url) => {
+   *   console.log("Blocked navigation to:", url);
+   * });
+   * ```
+   */
+  onNavigationBlocked(callback: (url: string) => void): void {
+    this._ensureOpen();
+    this._native.onNavigationBlocked(callback);
+  }
+
   // ---- Cookie access ----
 
   /**
