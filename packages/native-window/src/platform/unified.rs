@@ -1,0 +1,629 @@
+/// Unified cross-platform implementation using tao (windowing) + wry (webview).
+///
+/// Replaces the platform-specific `macos.rs` and `windows.rs` modules with a
+/// single implementation that works on macOS, Windows, and Linux.
+
+use std::borrow::Cow;
+use std::collections::HashMap;
+
+use tao::dpi::{LogicalPosition, LogicalSize};
+use tao::event::{Event, WindowEvent};
+use tao::event_loop::{ControlFlow, EventLoop};
+use tao::platform::run_return::EventLoopExtRunReturn;
+use tao::window::{Window, WindowBuilder};
+
+use wry::{WebView, WebViewBuilder};
+#[cfg(target_os = "linux")]
+use wry::WebViewBuilderExtUnix;
+#[cfg(target_os = "windows")]
+use wry::WebViewBuilderExtWindows;
+
+use crate::events::WindowEventHandlers;
+use crate::options::WindowOptions;
+use crate::window_manager::{
+    is_host_allowed, is_origin_trusted, json_escape, Command, EVENT_LOOP,
+    PENDING_BLURS, PENDING_CLOSES, PENDING_COOKIES, PENDING_FOCUSES,
+    PENDING_MESSAGES, PENDING_MOVES, PENDING_NAVIGATION_BLOCKED,
+    PENDING_PAGE_LOADS, PENDING_RESIZE_CALLBACKS, PENDING_TITLE_CHANGES,
+};
+
+/// Maximum IPC message size (10 MB).
+const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+
+// ── Types ──────────────────────────────────────────────────────
+
+/// A window + webview pair managed by the platform.
+struct WindowEntry {
+    window: Window,
+    webview: WebView,
+}
+
+/// Unified platform state backed by tao + wry.
+pub struct Platform {
+    windows: HashMap<u32, WindowEntry>,
+    /// Reverse map: tao WindowId → our u32 window ID.
+    window_id_map: HashMap<tao::window::WindowId, u32>,
+}
+
+// ── Platform initialization ────────────────────────────────────
+
+impl Platform {
+    /// Create a new platform instance and initialize the tao event loop.
+    pub fn new() -> napi::Result<Self> {
+        let event_loop = EventLoop::new();
+
+        // On macOS, set up the Edit menu so Cmd+C/V/X/A/Z work in the webview.
+        #[cfg(target_os = "macos")]
+        setup_macos_menu();
+
+        EVENT_LOOP.with(|el| {
+            *el.borrow_mut() = Some(event_loop);
+        });
+
+        Ok(Self {
+            windows: HashMap::new(),
+            window_id_map: HashMap::new(),
+        })
+    }
+
+    // ── Command processing ─────────────────────────────────────
+
+    /// Process a single command from the command queue.
+    pub fn process_command(
+        &mut self,
+        cmd: Command,
+        event_handlers: &mut HashMap<u32, WindowEventHandlers>,
+    ) -> napi::Result<()> {
+        match cmd {
+            Command::CreateWindow { id, options } => {
+                self.create_window(id, &options)?;
+            }
+            Command::LoadURL { id, url } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    entry.webview.load_url(&url)
+                        .map_err(|e| napi::Error::from_reason(format!("load_url failed: {}", e)))?;
+                    // Clear any stored HTML to prevent stale custom protocol responses
+                    crate::window_manager::remove_html_content(id);
+                }
+            }
+            Command::LoadHTML { id, html } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    // Store HTML for the custom protocol handler, then navigate
+                    // to nativewindow://localhost/ which triggers the handler.
+                    // This gives the page a proper origin (secure context) and
+                    // makes Cmd+R / browser-native reload work correctly.
+                    crate::window_manager::set_html_content(id, html);
+                    entry.webview.load_url("nativewindow://localhost/")
+                        .map_err(|e| napi::Error::from_reason(format!("load_url (html) failed: {}", e)))?;
+                }
+            }
+            Command::EvaluateJS { id, script } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    let _ = entry.webview.evaluate_script(&script);
+                }
+            }
+            Command::SetTitle { id, title } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    entry.window.set_title(&title);
+                }
+            }
+            Command::SetSize { id, width, height } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    let _ = entry.window.set_inner_size(LogicalSize::new(width, height));
+                }
+            }
+            Command::SetMinSize { id, width, height } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    entry.window.set_min_inner_size(Some(LogicalSize::new(width, height)));
+                }
+            }
+            Command::SetMaxSize { id, width, height } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    entry.window.set_max_inner_size(Some(LogicalSize::new(width, height)));
+                }
+            }
+            Command::SetPosition { id, x, y } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    entry.window.set_outer_position(LogicalPosition::new(x, y));
+                }
+            }
+            Command::SetResizable { id, resizable } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    entry.window.set_resizable(resizable);
+                }
+            }
+            Command::SetDecorations { id, decorations } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    entry.window.set_decorations(decorations);
+                }
+            }
+            Command::SetAlwaysOnTop { id, always_on_top } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    entry.window.set_always_on_top(always_on_top);
+                }
+            }
+            Command::Show { id } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    entry.window.set_visible(true);
+                }
+            }
+            Command::Hide { id } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    entry.window.set_visible(false);
+                }
+            }
+            Command::Close { id } => {
+                if let Some(entry) = self.windows.remove(&id) {
+                    let tao_id = entry.window.id();
+                    self.window_id_map.remove(&tao_id);
+                    // Drop entry — this closes the window and destroys the webview
+                    drop(entry);
+                    // Clean up event handlers and security config
+                    event_handlers.remove(&id);
+                    crate::window_manager::TRUSTED_ORIGINS_MAP.with(|o| {
+                        o.borrow_mut().remove(&id);
+                    });
+                    crate::window_manager::ALLOWED_HOSTS_MAP.with(|h| {
+                        h.borrow_mut().remove(&id);
+                    });
+                    crate::window_manager::PERMISSIONS_MAP.with(|p| {
+                        p.borrow_mut().remove(&id);
+                    });
+                    crate::window_manager::remove_html_content(id);
+                    // Fire on_close callback
+                    PENDING_CLOSES.with(|p| {
+                        p.borrow_mut().push(id);
+                    });
+                }
+            }
+            Command::Focus { id } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    entry.window.set_focus();
+                }
+            }
+            Command::Maximize { id } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    entry.window.set_maximized(true);
+                }
+            }
+            Command::Minimize { id } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    entry.window.set_minimized(true);
+                }
+            }
+            Command::Unmaximize { id } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    entry.window.set_maximized(false);
+                }
+            }
+            Command::Reload { id } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    // With the custom protocol, reload() works correctly for both
+                    // URL and HTML content — HTML pages are at nativewindow://localhost/
+                    // so the browser re-requests the protocol handler on reload.
+                    if let Err(e) = entry.webview.reload() {
+                        eprintln!("[native-window] Reload failed: {}", e);
+                    }
+                }
+            }
+            Command::GetCookies { id, url } => {
+                if let Some(entry) = self.windows.get(&id) {
+                    let json = match &url {
+                        Some(u) => {
+                            match entry.webview.cookies_for_url(u) {
+                                Ok(cookies) => serialize_cookies(&cookies),
+                                Err(_) => "[]".to_string(),
+                            }
+                        }
+                        None => {
+                            match entry.webview.cookies() {
+                                Ok(cookies) => serialize_cookies(&cookies),
+                                Err(_) => "[]".to_string(),
+                            }
+                        }
+                    };
+                    PENDING_COOKIES.with(|p| {
+                        p.borrow_mut().push((id, json));
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // ── Window creation ────────────────────────────────────────
+
+    /// Create a new tao window + wry webview.
+    fn create_window(
+        &mut self,
+        id: u32,
+        options: &WindowOptions,
+    ) -> napi::Result<()> {
+        EVENT_LOOP.with(|el| {
+            let el_ref = el.borrow();
+            let event_loop = el_ref.as_ref().ok_or_else(|| {
+                napi::Error::from_reason("Event loop not initialized")
+            })?;
+
+            // ── Build the tao window ───────────────────────────
+            let width = options.width.unwrap_or(800.0);
+            let height = options.height.unwrap_or(600.0);
+
+            let mut win_builder = WindowBuilder::new()
+                .with_title(options.title.as_deref().unwrap_or(""))
+                .with_inner_size(LogicalSize::new(width, height))
+                .with_resizable(options.resizable.unwrap_or(true))
+                .with_decorations(options.decorations.unwrap_or(true))
+                .with_always_on_top(options.always_on_top.unwrap_or(false))
+                .with_visible(options.visible.unwrap_or(true));
+
+            if let (Some(x), Some(y)) = (options.x, options.y) {
+                win_builder = win_builder.with_position(LogicalPosition::new(x, y));
+            }
+            if let (Some(min_w), Some(min_h)) = (options.min_width, options.min_height) {
+                win_builder = win_builder.with_min_inner_size(LogicalSize::new(min_w, min_h));
+            }
+            if let (Some(max_w), Some(max_h)) = (options.max_width, options.max_height) {
+                win_builder = win_builder.with_max_inner_size(LogicalSize::new(max_w, max_h));
+            }
+            if options.transparent.unwrap_or(false) {
+                win_builder = win_builder.with_transparent(true);
+            }
+
+            let window = win_builder.build(event_loop)
+                .map_err(|e| napi::Error::from_reason(format!("Failed to create window: {}", e)))?;
+
+            // ── Build the wry webview ──────────────────────────
+            let window_id = id; // Capture for closures
+
+            let mut wv_builder = WebViewBuilder::new()
+                .with_devtools(options.devtools.unwrap_or(false))
+                .with_transparent(options.transparent.unwrap_or(false))
+                .with_visible(options.visible.unwrap_or(true));
+
+            // IPC handler — receives messages from window.ipc.postMessage()
+            wv_builder = wv_builder.with_ipc_handler(move |req: http::Request<String>| {
+                let message = req.body().clone();
+                if message.len() > MAX_MESSAGE_SIZE {
+                    return;
+                }
+                let source_url = req.uri().to_string();
+
+                if !is_origin_trusted(window_id, &source_url) {
+                    return;
+                }
+
+                PENDING_MESSAGES.with(|p| {
+                    p.borrow_mut().push((window_id, message, source_url));
+                });
+            });
+
+            // Navigation handler — block dangerous schemes + enforce allowedHosts
+            wv_builder = wv_builder.with_navigation_handler(move |url: String| {
+                let lower = url.to_lowercase();
+                // Always allow our custom protocol for HTML content.
+                // macOS: nativewindow://localhost/, Windows: https://nativewindow.localhost/
+                if lower.starts_with("nativewindow:")
+                    || lower.contains("nativewindow.localhost")
+                {
+                    return true;
+                }
+                // Block dangerous URL schemes
+                if lower.starts_with("javascript:")
+                    || lower.starts_with("file:")
+                    || lower.starts_with("data:")
+                    || lower.starts_with("blob:")
+                {
+                    return false;
+                }
+                // Enforce allowedHosts
+                if !is_host_allowed(window_id, &url) {
+                    PENDING_NAVIGATION_BLOCKED.with(|p| {
+                        p.borrow_mut().push((window_id, url));
+                    });
+                    return false;
+                }
+                true
+            });
+
+            // Page load handler — fires on navigation start and finish
+            wv_builder = wv_builder.with_on_page_load_handler(move |event, url| {
+                let event_str = match event {
+                    wry::PageLoadEvent::Started => "started".to_string(),
+                    wry::PageLoadEvent::Finished => "finished".to_string(),
+                };
+                PENDING_PAGE_LOADS.with(|p| {
+                    p.borrow_mut().push((window_id, event_str, url));
+                });
+            });
+
+            // Title changed handler
+            wv_builder = wv_builder.with_document_title_changed_handler(move |title| {
+                PENDING_TITLE_CHANGES.with(|p| {
+                    p.borrow_mut().push((window_id, title));
+                });
+            });
+
+            // Custom protocol handler — serves stored HTML content at nativewindow://localhost/
+            // This gives HTML pages a proper origin (secure context) so APIs like
+            // navigator.mediaDevices are available, and makes browser-native reload
+            // (Cmd+R) work correctly instead of showing a blank page.
+            wv_builder = wv_builder.with_custom_protocol("nativewindow".into(), move |_webview_id, _request| {
+                let html = crate::window_manager::get_html_content(window_id)
+                    .unwrap_or_default();
+                http::Response::builder()
+                    .header("Content-Type", "text/html; charset=utf-8")
+                    .header("Cache-Control", "no-store")
+                    .body(Cow::Owned(html.into_bytes()))
+                    .unwrap()
+            });
+
+            // Block popups (window.open)
+            wv_builder = wv_builder.with_new_window_req_handler(move |_url, _features| {
+                wry::NewWindowResponse::Deny
+            });
+
+            // CSP injection via initialization script
+            if let Some(ref csp) = options.csp {
+                let escaped_csp = csp.replace('\\', "\\\\").replace('\'', "\\'");
+                let csp_script = format!(
+                    "document.addEventListener('DOMContentLoaded',function(){{var m=document.createElement('meta');\
+                    m.httpEquiv='Content-Security-Policy';m.content='{}';document.head.insertBefore(m,\
+                    document.head.firstChild)}},{{once:true}});",
+                    escaped_csp
+                );
+                wv_builder = wv_builder.with_initialization_script(&csp_script);
+            }
+
+            // Geolocation blocking — remove the API entirely if not allowed
+            let perms = crate::window_manager::get_permissions(id);
+            if !perms.allow_camera && !perms.allow_microphone {
+                // Note: wry doesn't expose permission delegates.
+                // Camera/mic permissions are handled by the OS default (prompt user).
+                // We document this as a known limitation of the wry backend.
+            }
+            if !options.allow_geolocation.unwrap_or(false) {
+                wv_builder = wv_builder.with_initialization_script(
+                    "Object.defineProperty(navigator,'geolocation',{value:undefined,writable:false,configurable:false});"
+                );
+            }
+
+            // On Windows, map the custom protocol to https:// for secure context.
+            // This makes nativewindow://localhost/ → https://nativewindow.localhost/
+            // so APIs requiring secure context (crypto, mediaDevices, etc.) work.
+            #[cfg(target_os = "windows")]
+            {
+                wv_builder = wv_builder.with_https_scheme(true);
+            }
+
+            // Build the webview — platform-specific build method
+            #[cfg(target_os = "linux")]
+            let webview = {
+                use tao::platform::unix::WindowExtUnix;
+                let gtk_window = window.gtk_window();
+                wv_builder.build_gtk(gtk_window)
+                    .map_err(|e| napi::Error::from_reason(format!("Failed to create webview: {}", e)))?
+            };
+
+            #[cfg(not(target_os = "linux"))]
+            let webview = wv_builder.build(&window)
+                .map_err(|e| napi::Error::from_reason(format!("Failed to create webview: {}", e)))?;
+
+            // Store the window + webview
+            let tao_window_id = window.id();
+            self.window_id_map.insert(tao_window_id, id);
+            self.windows.insert(id, WindowEntry {
+                window,
+                webview,
+            });
+
+            Ok(())
+        })
+    }
+
+    // ── Event loop pumping ─────────────────────────────────────
+
+    /// Pump the tao event loop (non-blocking). Processes all pending OS events
+    /// and pushes them to PENDING_* deferred callback buffers.
+    ///
+    /// Uses a two-phase approach:
+    /// - Phase A: `run_return` dispatches tao-level events (WindowEvent, etc.)
+    /// - Phase B (macOS): raw NSApp event drain for cascading WebKit events
+    ///
+    /// Phase B is needed because tao's `run_return` processes one CFRunLoop
+    /// iteration via `[NSApp run]`, but WebKit operations (network → parse →
+    /// render) generate cascading events that need additional iterations.
+    /// Without the drain, each step waits 16ms for the next pump call.
+    pub fn pump_events(&mut self) {
+        // Phase A: tao event dispatch
+        EVENT_LOOP.with(|el| {
+            let mut event_loop_opt = el.borrow_mut().take();
+            if let Some(ref mut event_loop) = event_loop_opt {
+                let window_id_map = &self.window_id_map;
+                let windows = &self.windows;
+
+                event_loop.run_return(|event, _target, control_flow| {
+                    // Ensure non-blocking from the start, regardless of any
+                    // stale ControlFlow persisted in tao's global Handler.
+                    *control_flow = ControlFlow::Poll;
+
+                    match event {
+                        Event::WindowEvent { window_id, event: ref win_event, .. } => {
+                            if let Some(&id) = window_id_map.get(&window_id) {
+                                match win_event {
+                                    WindowEvent::Resized(size) => {
+                                        let scale = windows.get(&id)
+                                            .map(|e| e.window.scale_factor())
+                                            .unwrap_or(1.0);
+                                        let logical: LogicalSize<f64> = size.to_logical(scale);
+                                        PENDING_RESIZE_CALLBACKS.with(|p| {
+                                            p.borrow_mut().push((id, logical.width, logical.height));
+                                        });
+                                    }
+                                    WindowEvent::Moved(pos) => {
+                                        let scale = windows.get(&id)
+                                            .map(|e| e.window.scale_factor())
+                                            .unwrap_or(1.0);
+                                        let logical: LogicalPosition<f64> = pos.to_logical(scale);
+                                        PENDING_MOVES.with(|p| {
+                                            p.borrow_mut().push((id, logical.x, logical.y));
+                                        });
+                                    }
+                                    WindowEvent::Focused(focused) => {
+                                        if *focused {
+                                            PENDING_FOCUSES.with(|p| p.borrow_mut().push(id));
+                                        } else {
+                                            PENDING_BLURS.with(|p| p.borrow_mut().push(id));
+                                        }
+                                    }
+                                    WindowEvent::CloseRequested => {
+                                        PENDING_CLOSES.with(|p| p.borrow_mut().push(id));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        Event::MainEventsCleared => {
+                            *control_flow = ControlFlow::Exit;
+                        }
+                        _ => {}
+                    }
+                });
+            }
+            // Put the event loop back
+            *el.borrow_mut() = event_loop_opt;
+        });
+
+        // Phase B: drain remaining platform events for WebKit processing
+        #[cfg(target_os = "macos")]
+        self.drain_macos_events();
+    }
+
+    /// Drain remaining events and run-loop sources after `run_return`.
+    ///
+    /// WebKit (WKWebView) relies on **both** NSApp events and CFRunLoop
+    /// sources (GCD dispatch queues, Mach port notifications) for internal
+    /// processing.  tao's `run_return` processes one event-loop iteration
+    /// then exits via `[NSApp stop:]`, leaving pending CFRunLoop sources
+    /// unprocessed.  The previous implementation only drained NSApp events
+    /// via `nextEventMatchingMask:distantPast`, which missed GCD/Mach-port
+    /// callbacks entirely — causing 3-10 s content-rendering delays.
+    ///
+    /// This method alternates between:
+    ///   1. Draining all immediately-available NSApp events (`sendEvent:`)
+    ///   2. Processing one pending CFRunLoop source (`CFRunLoopRunInMode`)
+    /// …until both queues are empty.  CFRunLoop sources can generate NSApp
+    /// events and vice-versa, so alternating handles cascading work.
+    #[cfg(target_os = "macos")]
+    fn drain_macos_events(&self) {
+        use objc2_app_kit::{NSApplication, NSEventMask};
+        use objc2_foundation::{MainThreadMarker, NSDate, NSDefaultRunLoopMode};
+
+        // Raw FFI to CoreFoundation for processing GCD/Mach-port sources.
+        // CoreFoundation.framework is always linked on macOS — no extra dep.
+        extern "C" {
+            static kCFRunLoopDefaultMode: *const std::ffi::c_void;
+            fn CFRunLoopRunInMode(
+                mode: *const std::ffi::c_void,
+                seconds: f64,
+                return_after_source_handled: u8,
+            ) -> i32;
+        }
+        /// `CFRunLoopRunInMode` return value when a source was dispatched.
+        const K_CF_RUN_LOOP_RUN_HANDLED_SOURCE: i32 = 4;
+
+        unsafe {
+            let mtm = MainThreadMarker::new().unwrap();
+            let app = NSApplication::sharedApplication(mtm);
+
+            loop {
+                let mut did_work = false;
+
+                // ── Phase 1: drain all immediately-available NSApp events ──
+                loop {
+                    let event = app.nextEventMatchingMask_untilDate_inMode_dequeue(
+                        NSEventMask::Any,
+                        Some(&NSDate::distantPast()),
+                        NSDefaultRunLoopMode,
+                        true,
+                    );
+                    match event {
+                        Some(evt) => {
+                            app.sendEvent(&evt);
+                            did_work = true;
+                        }
+                        None => break,
+                    }
+                }
+
+                // ── Phase 2: process one pending CFRunLoop source ──────────
+                // (GCD dispatch blocks, Mach-port notifications, timers)
+                let result = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, 1);
+                if result == K_CF_RUN_LOOP_RUN_HANDLED_SOURCE {
+                    did_work = true;
+                }
+
+                if !did_work {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// ── macOS Edit menu setup ──────────────────────────────────────
+
+/// On macOS, set up the Edit menu so standard keyboard shortcuts
+/// (Cmd+C, Cmd+V, Cmd+X, Cmd+A, Cmd+Z) work in the webview.
+/// Tao creates the NSApplication but doesn't add an Edit menu.
+#[cfg(target_os = "macos")]
+fn setup_macos_menu() {
+    // TODO: tao 0.34 removed its menu API. To restore the Edit menu
+    // (Cmd+C/V/X/A/Z) in the webview, add objc2-app-kit as a
+    // macOS-only dependency and create the NSMenu directly.
+}
+
+// ── Cookie serialization ───────────────────────────────────────
+
+/// Serialize a list of wry cookies to a JSON array string.
+fn serialize_cookies(cookies: &[wry::cookie::Cookie<'static>]) -> String {
+    // wry::CookieJar wraps cookie::Cookie
+    let mut out = String::from("[");
+    for (i, cookie_jar) in cookies.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let name = json_escape(cookie_jar.name());
+        let value = json_escape(cookie_jar.value());
+        let domain = cookie_jar.domain()
+            .map(|d| json_escape(d))
+            .unwrap_or_else(|| "\"\"".to_string());
+        let path = cookie_jar.path()
+            .map(|p| json_escape(p))
+            .unwrap_or_else(|| "\"/\"".to_string());
+        let http_only = cookie_jar.http_only().unwrap_or(false);
+        let secure = cookie_jar.secure().unwrap_or(false);
+        let same_site = match cookie_jar.same_site() {
+            Some(wry::cookie::SameSite::Strict) => "\"Strict\"",
+            Some(wry::cookie::SameSite::Lax) => "\"Lax\"",
+            Some(wry::cookie::SameSite::None) => "\"None\"",
+            None => "null",
+        };
+        let expires = cookie_jar.expires()
+            .and_then(|e| match e {
+                wry::cookie::Expiration::DateTime(dt) => {
+                    Some(format!("{}", dt.unix_timestamp()))
+                }
+                wry::cookie::Expiration::Session => None,
+            })
+            .map(|ts| ts)
+            .unwrap_or_else(|| "null".to_string());
+
+        out.push_str(&format!(
+            "{{\"name\":{},\"value\":{},\"domain\":{},\"path\":{},\"httpOnly\":{},\"secure\":{},\"sameSite\":{},\"expires\":{}}}",
+            name, value, domain, path, http_only, secure, same_site, expires
+        ));
+    }
+    out.push(']');
+    out
+}

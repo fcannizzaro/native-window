@@ -1,0 +1,16 @@
+{
+  "name": "@fcannizzaro/native-window-linux-x64-gnu",
+  "version": "0.1.3",
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "main": "native-window.linux-x64-gnu.node",
+  "files": ["native-window.linux-x64-gnu.node"],
+  "description": "Native window addon for Linux x64",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fcannizzaro/native-window"
+  },
+  "engines": {
+    "node": ">= 10"
+  }
+}

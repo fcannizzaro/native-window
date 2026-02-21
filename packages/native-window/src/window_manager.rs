@@ -1,4 +1,7 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+
+use tao::event_loop::EventLoop;
 
 use crate::events::WindowEventHandlers;
 use crate::options::WindowOptions;
@@ -11,7 +14,7 @@ use crate::options::WindowOptions;
 pub struct PermissionFlags {
     pub allow_camera: bool,
     pub allow_microphone: bool,
-    #[allow(dead_code)] // Only read in Windows platform code
+    #[allow(dead_code)]
     pub allow_file_system: bool,
 }
 
@@ -62,13 +65,11 @@ pub enum Command {
         width: f64,
         height: f64,
     },
-    #[allow(dead_code)]
     SetMinSize {
         id: u32,
         width: f64,
         height: f64,
     },
-    #[allow(dead_code)]
     SetMaxSize {
         id: u32,
         width: f64,
@@ -79,12 +80,10 @@ pub enum Command {
         x: f64,
         y: f64,
     },
-    #[allow(dead_code)]
     SetResizable {
         id: u32,
         resizable: bool,
     },
-    #[allow(dead_code)]
     SetDecorations {
         id: u32,
         decorations: bool,
@@ -129,10 +128,7 @@ pub struct WindowManager {
     pub command_queue: Vec<Command>,
     pub event_handlers: HashMap<u32, WindowEventHandlers>,
     pub initialized: bool,
-    #[cfg(target_os = "macos")]
-    pub platform: Option<super::platform::macos::MacOSPlatform>,
-    #[cfg(target_os = "windows")]
-    pub platform: Option<super::platform::windows::WindowsPlatform>,
+    pub platform: Option<super::platform::Platform>,
 }
 
 /// Maximum number of commands in the queue before logging a warning.
@@ -176,7 +172,7 @@ impl WindowManager {
     }
 
     /// Remove event handlers and security config for a closed window to prevent memory leaks.
-    #[allow(dead_code)] // Used by macOS platform, not by Windows
+    #[allow(dead_code)]
     pub fn remove_event_handlers(&mut self, id: u32) {
         self.event_handlers.remove(&id);
         TRUSTED_ORIGINS_MAP.with(|o| {
@@ -188,45 +184,59 @@ impl WindowManager {
         PERMISSIONS_MAP.with(|p| {
             p.borrow_mut().remove(&id);
         });
+        HTML_CONTENT_MAP.with(|m| {
+            m.borrow_mut().remove(&id);
+        });
     }
 }
 
 thread_local! {
-    pub static MANAGER: std::cell::RefCell<WindowManager> = std::cell::RefCell::new(WindowManager::new());
+    pub static MANAGER: RefCell<WindowManager> = RefCell::new(WindowManager::new());
+    /// The tao event loop. Stored outside MANAGER because `run_return` takes
+    /// `&mut EventLoop` and we need MANAGER to not be borrowed during event dispatch.
+    pub static EVENT_LOOP: RefCell<Option<EventLoop<()>>> = RefCell::new(None);
     /// Per-window trusted origins for IPC message filtering.
-    /// Stored outside MANAGER so the macOS NavigationDelegate / IPC handler
-    /// can read them while MANAGER is mutably borrowed by pump_events.
-    pub static TRUSTED_ORIGINS_MAP: std::cell::RefCell<HashMap<u32, Vec<String>>> = std::cell::RefCell::new(HashMap::new());
-    /// Per-window allowed hosts for navigation restriction.
-    /// Stored outside MANAGER so the macOS NavigationDelegate can read them
+    /// Stored outside MANAGER so event handlers can read them
     /// while MANAGER is mutably borrowed by pump_events.
-    pub static ALLOWED_HOSTS_MAP: std::cell::RefCell<HashMap<u32, Vec<String>>> = std::cell::RefCell::new(HashMap::new());
+    pub static TRUSTED_ORIGINS_MAP: RefCell<HashMap<u32, Vec<String>>> = RefCell::new(HashMap::new());
+    /// Per-window allowed hosts for navigation restriction.
+    /// Stored outside MANAGER so navigation handlers can read them
+    /// while MANAGER is mutably borrowed by pump_events.
+    pub static ALLOWED_HOSTS_MAP: RefCell<HashMap<u32, Vec<String>>> = RefCell::new(HashMap::new());
     /// Per-window permission flags for platform callbacks.
-    /// Stored outside MANAGER so macOS WKUIDelegate / Windows PermissionRequested
-    /// handlers can read them while MANAGER is mutably borrowed by pump_events.
-    pub static PERMISSIONS_MAP: std::cell::RefCell<HashMap<u32, PermissionFlags>> = std::cell::RefCell::new(HashMap::new());
-    /// Buffer for IPC messages that arrive while MANAGER is already borrowed (reentrant calls).
+    /// Stored outside MANAGER so permission handlers can read them
+    /// while MANAGER is mutably borrowed by pump_events.
+    pub static PERMISSIONS_MAP: RefCell<HashMap<u32, PermissionFlags>> = RefCell::new(HashMap::new());
+    /// Buffer for IPC messages deferred during pump_events.
     /// Each entry: (window_id, message, source_url).
-    pub static PENDING_MESSAGES: std::cell::RefCell<Vec<(u32, String, String)>> = std::cell::RefCell::new(Vec::new());
-    /// Buffer for window close events that arrive while MANAGER is already borrowed.
-    pub static PENDING_CLOSES: std::cell::RefCell<Vec<u32>> = std::cell::RefCell::new(Vec::new());
+    pub static PENDING_MESSAGES: RefCell<Vec<(u32, String, String)>> = RefCell::new(Vec::new());
+    /// Buffer for window close events deferred during pump_events.
+    pub static PENDING_CLOSES: RefCell<Vec<u32>> = RefCell::new(Vec::new());
     /// Buffer for reload events triggered by keyboard shortcuts during pump_events.
-    pub static PENDING_RELOADS: std::cell::RefCell<Vec<u32>> = std::cell::RefCell::new(Vec::new());
+    pub static PENDING_RELOADS: RefCell<Vec<u32>> = RefCell::new(Vec::new());
     /// Buffer for resize callback events deferred during pump_events.
     /// Each entry: (window_id, width, height).
-    pub static PENDING_RESIZE_CALLBACKS: std::cell::RefCell<Vec<(u32, f64, f64)>> = std::cell::RefCell::new(Vec::new());
+    pub static PENDING_RESIZE_CALLBACKS: RefCell<Vec<(u32, f64, f64)>> = RefCell::new(Vec::new());
     /// Buffer for move callback events deferred during pump_events.
     /// Each entry: (window_id, x, y).
-    pub static PENDING_MOVES: std::cell::RefCell<Vec<(u32, f64, f64)>> = std::cell::RefCell::new(Vec::new());
+    pub static PENDING_MOVES: RefCell<Vec<(u32, f64, f64)>> = RefCell::new(Vec::new());
     /// Buffer for focus events deferred during pump_events.
-    pub static PENDING_FOCUSES: std::cell::RefCell<Vec<u32>> = std::cell::RefCell::new(Vec::new());
+    pub static PENDING_FOCUSES: RefCell<Vec<u32>> = RefCell::new(Vec::new());
     /// Buffer for blur events deferred during pump_events.
-    pub static PENDING_BLURS: std::cell::RefCell<Vec<u32>> = std::cell::RefCell::new(Vec::new());
+    pub static PENDING_BLURS: RefCell<Vec<u32>> = RefCell::new(Vec::new());
     /// Buffer for page load events deferred during pump_events: (window_id, event_type, url).
     /// event_type is "started" or "finished".
-    pub static PENDING_PAGE_LOADS: std::cell::RefCell<Vec<(u32, String, String)>> = std::cell::RefCell::new(Vec::new());
+    pub static PENDING_PAGE_LOADS: RefCell<Vec<(u32, String, String)>> = RefCell::new(Vec::new());
     /// Buffer for navigation-blocked events deferred during pump_events: (window_id, url).
-    pub static PENDING_NAVIGATION_BLOCKED: std::cell::RefCell<Vec<(u32, String)>> = std::cell::RefCell::new(Vec::new());
+    pub static PENDING_NAVIGATION_BLOCKED: RefCell<Vec<(u32, String)>> = RefCell::new(Vec::new());
+    /// Buffer for document title change events deferred during pump_events: (window_id, title).
+    pub static PENDING_TITLE_CHANGES: RefCell<Vec<(u32, String)>> = RefCell::new(Vec::new());
+    /// Buffer for cookie query results deferred during pump_events: (window_id, json).
+    pub static PENDING_COOKIES: RefCell<Vec<(u32, String)>> = RefCell::new(Vec::new());
+    /// Per-window stored HTML content for the custom protocol handler.
+    /// When loadHtml() is called, the HTML is stored here and the webview
+    /// navigates to `nativewindow://localhost/` which reads from this map.
+    pub static HTML_CONTENT_MAP: RefCell<HashMap<u32, String>> = RefCell::new(HashMap::new());
 }
 
 /// Execute a closure with mutable access to the global window manager.
@@ -235,6 +245,29 @@ where
     F: FnOnce(&mut WindowManager) -> R,
 {
     MANAGER.with(|m| f(&mut m.borrow_mut()))
+}
+
+// ── HTML content storage for custom protocol ───────────────────
+
+/// Store HTML content for a window's custom protocol handler.
+pub fn set_html_content(window_id: u32, html: String) {
+    HTML_CONTENT_MAP.with(|m| {
+        m.borrow_mut().insert(window_id, html);
+    });
+}
+
+/// Retrieve stored HTML content for a window's custom protocol handler.
+pub fn get_html_content(window_id: u32) -> Option<String> {
+    HTML_CONTENT_MAP.with(|m| {
+        m.borrow().get(&window_id).cloned()
+    })
+}
+
+/// Remove stored HTML content for a window (called on close or loadUrl).
+pub fn remove_html_content(window_id: u32) {
+    HTML_CONTENT_MAP.with(|m| {
+        m.borrow_mut().remove(&window_id);
+    });
 }
 
 /// Extract the origin (scheme + host + port) from a URL string using the
@@ -318,7 +351,7 @@ fn extract_host(url: &str) -> Option<&str> {
 /// Check if a URL's host is permitted by the window's `allowedHosts` list.
 /// Returns `true` if:
 ///   - No `allowed_hosts` are configured for this window (allow all)
-///   - The URL is an internal URL (`about:blank`, `native-window.local`)
+///   - The URL is an internal URL (`about:blank`, `native-window.local`, `nativewindow.localhost`)
 ///   - The URL's host matches one of the allowed patterns
 ///
 /// Pattern matching (case-insensitive):
@@ -328,7 +361,11 @@ fn extract_host(url: &str) -> Option<&str> {
 pub fn is_host_allowed(window_id: u32, url: &str) -> bool {
     // Internal URLs are always allowed
     let lower = url.to_lowercase();
-    if lower.starts_with("about:") || lower.contains("native-window.local") {
+    if lower.starts_with("about:")
+        || lower.starts_with("nativewindow:")
+        || lower.contains("native-window.local")
+        || lower.contains("nativewindow.localhost")
+    {
         return true;
     }
 

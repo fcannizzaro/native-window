@@ -266,7 +266,7 @@ The following functions exist for backward compatibility but are **not needed** 
 ## Known Limitations
 
 - **~16ms event latency** from the `pumpEvents()` polling interval
-- **HTML origin on Windows** — content loaded via `loadHtml()` has an `about:blank` origin on Windows (WebView2 limitation); on macOS, a synthetic `https://native-window.local/` origin is used. Use `loadUrl()` for fetch/XHR that requires a real origin.
+- **HTML origin differences** — content loaded via `loadHtml()` has a `https://nativewindow.localhost` origin on Windows and a `nativewindow://localhost` origin on macOS (both are secure contexts). When configuring `trustedOrigins`, use the platform-appropriate value.
 - **No return values from `unsafe.evaluateJs()`** — use `postMessage`/`onMessage` to send results back
 - **2 MB HTML limit on Windows** when using `loadHtml()`
 - **10 MB message size limit** — messages larger than 10 MB are silently dropped at the native layer

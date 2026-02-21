@@ -75,21 +75,27 @@ export interface WindowOptions {
   /**
    * Allow the webview to access the camera when requested.
    * Default: false (all camera requests are denied).
+   * @note Not yet enforced in the wry backend. The OS default (prompt user) applies.
    */
   allowCamera?: boolean;
   /**
    * Allow the webview to access the microphone when requested.
    * Default: false (all microphone requests are denied).
+   * @note Not yet enforced in the wry backend. The OS default (prompt user) applies.
    */
   allowMicrophone?: boolean;
   /**
    * Allow the webview to use the File System Access API
    * (`showOpenFilePicker`, `showSaveFilePicker`, `showDirectoryPicker`).
-   * Only effective on Windows (WebView2). macOS WKWebView does not
-   * support the File System Access API.
    * Default: false (all file system access requests are denied).
+   * @note Not yet enforced in the wry backend. The OS default applies.
    */
   allowFileSystem?: boolean;
+  /**
+   * Allow the webview to access geolocation when requested.
+   * Default: false (navigator.geolocation is removed from the page).
+   */
+  allowGeolocation?: boolean;
 }
 
 export class NativeWindow {
@@ -155,8 +161,8 @@ export interface RuntimeInfo {
   available: boolean;
   /** The version string of the runtime, if detected. */
   version?: string;
-  /** The current platform: "macos", "windows", or "unsupported". */
-  platform: "macos" | "windows" | "unsupported";
+  /** The current platform: "macos", "windows", "linux", or "unsupported". */
+  platform: "macos" | "windows" | "linux" | "unsupported";
 }
 
 /**
@@ -164,6 +170,7 @@ export interface RuntimeInfo {
  *
  * - **macOS**: Always returns available (WKWebView is a system framework).
  * - **Windows**: Detects WebView2 via `GetAvailableCoreWebView2BrowserVersionString`.
+ * - **Linux**: Always returns available (WebKitGTK is required at build time).
  * - **Other**: Returns `{ available: false, platform: "unsupported" }`.
  */
 export function checkRuntime(): RuntimeInfo;
@@ -174,6 +181,7 @@ export function checkRuntime(): RuntimeInfo;
  * - **macOS**: Returns immediately (WKWebView is always available).
  * - **Windows**: If WebView2 is missing, downloads the Evergreen Bootstrapper
  *   (~2MB) from Microsoft and runs it silently. Throws on failure.
+ * - **Linux**: Returns immediately (WebKitGTK is required at build time).
  * - **Other**: Throws an error.
  *
  * @security This function downloads and executes a Microsoft-signed binary

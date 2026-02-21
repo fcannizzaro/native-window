@@ -61,7 +61,7 @@ pub struct WindowOptions {
     /// example.com (and example.com itself). When unset or empty, all hosts
     /// are allowed.
     ///
-    /// Internal navigations (`about:blank`, `https://native-window.local/`) are
+    /// Internal navigations (`about:blank`, `native-window.local`, `nativewindow.localhost`) are
     /// always permitted regardless of this setting.
     pub allowed_hosts: Option<Vec<String>>,
     /// Allow the webview to access the camera when requested.
@@ -71,10 +71,12 @@ pub struct WindowOptions {
     /// Default: false (all microphone permission requests are denied).
     pub allow_microphone: Option<bool>,
     /// Allow the webview to use the File System Access API (showOpenFilePicker,
-    /// showSaveFilePicker, showDirectoryPicker). Only effective on Windows
-    /// (WebView2). macOS WKWebView does not support the File System Access API.
+    /// showSaveFilePicker, showDirectoryPicker).
     /// Default: false (all file system access requests are denied).
     pub allow_file_system: Option<bool>,
+    /// Allow the webview to access geolocation when requested.
+    /// Default: false (navigator.geolocation is removed from the page).
+    pub allow_geolocation: Option<bool>,
 }
 
 impl Default for WindowOptions {
@@ -101,6 +103,7 @@ impl Default for WindowOptions {
             allow_camera: None,
             allow_microphone: None,
             allow_file_system: None,
+            allow_geolocation: None,
         }
     }
 }
