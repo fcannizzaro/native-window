@@ -4,7 +4,7 @@ use napi::JsFunction;
 use napi_derive::napi;
 
 use crate::options::WindowOptions;
-use crate::window_manager::{with_manager, Command, ALLOWED_HOSTS_MAP, TRUSTED_ORIGINS_MAP};
+use crate::window_manager::{extract_origin, with_manager, Command, ALLOWED_HOSTS_MAP, TRUSTED_ORIGINS_MAP};
 
 /// A native OS window with an embedded webview.
 #[napi]
@@ -27,12 +27,18 @@ impl NativeWindow {
                 ));
             }
             let id = mgr.allocate_id()?;
-            // Store trusted origins for native-layer IPC filtering
-            // (separate thread-local so macOS delegates can read while MANAGER is borrowed)
+            // Store trusted origins for native-layer IPC filtering.
+            // Normalize each origin through extract_origin() so that
+            // user-provided values like "HTTPS://Example.Com:443" are
+            // stored as "https://example.com" (WHATWG URL Standard).
             if let Some(ref origins) = opts.trusted_origins {
-                if !origins.is_empty() {
+                let normalized: Vec<String> = origins
+                    .iter()
+                    .filter_map(|o| extract_origin(o))
+                    .collect();
+                if !normalized.is_empty() {
                     TRUSTED_ORIGINS_MAP.with(|o| {
-                        o.borrow_mut().insert(id, origins.clone());
+                        o.borrow_mut().insert(id, normalized);
                     });
                 }
             }

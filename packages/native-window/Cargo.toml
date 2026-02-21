@@ -9,6 +9,7 @@ crate-type = ["cdylib"]
 [dependencies]
 napi = { version = "2", features = ["napi8"] }
 napi-derive = "2"
+url = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

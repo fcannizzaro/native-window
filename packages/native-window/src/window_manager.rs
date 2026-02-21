@@ -198,26 +198,24 @@ where
     MANAGER.with(|m| f(&mut m.borrow_mut()))
 }
 
-/// Extract the origin (scheme + host + port) from a URL string.
-/// Returns `None` for malformed URLs or URLs without a valid origin.
-/// Used for native-layer IPC origin validation.
-pub fn extract_origin(url: &str) -> Option<String> {
-    // Find "://" to split scheme from the rest
-    let scheme_end = url.find("://")?;
-    let scheme = &url[..scheme_end];
-    if scheme.is_empty() {
+/// Extract the origin (scheme + host + port) from a URL string using the
+/// WHATWG URL Standard (`url` crate). Returns `None` for malformed URLs or
+/// URLs with opaque origins (e.g. `file:`, `data:`, `blob:`, custom schemes).
+///
+/// The returned origin string is fully normalized:
+///   - Scheme and host are lowercased
+///   - Default ports are stripped (80 for http, 443 for https)
+///   - Userinfo is stripped
+///   - IPv6 addresses are handled correctly
+pub fn extract_origin(raw: &str) -> Option<String> {
+    let parsed = url::Url::parse(raw).ok()?;
+    let origin = parsed.origin();
+    let serialized = origin.ascii_serialization();
+    // Opaque origins serialize as "null" — treat as no valid origin.
+    if serialized == "null" {
         return None;
     }
-    let rest = &url[scheme_end + 3..];
-    // Extract host (+ optional port), stopping at '/' or '?' or '#' or end
-    let host_end = rest
-        .find(|c: char| c == '/' || c == '?' || c == '#')
-        .unwrap_or(rest.len());
-    let host_port = &rest[..host_end];
-    if host_port.is_empty() {
-        return None;
-    }
-    Some(format!("{}://{}", scheme, host_port))
+    Some(serialized)
 }
 
 /// Check if a source URL's origin matches any of the trusted origins for a window.

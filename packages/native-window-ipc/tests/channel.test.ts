@@ -684,6 +684,96 @@ describe("trustedOrigins", () => {
 
     expect(received).toEqual(["any"]);
   });
+
+  test("normalizes case-insensitive origins (HTTPS://EXAMPLE.COM matches https://example.com)", () => {
+    const win = createMockWindow();
+    const ch = createChannel(win as any, {
+      injectClient: false,
+      schemas: testSchemas,
+      trustedOrigins: ["HTTPS://EXAMPLE.COM"],
+    });
+
+    const received: string[] = [];
+    ch.on("ping", (msg) => received.push(msg));
+
+    win._simulateIncoming(
+      JSON.stringify({ $ch: "ping", p: "normalized" }),
+      "https://example.com/page",
+    );
+
+    expect(received).toEqual(["normalized"]);
+  });
+
+  test("normalizes default port (https://example.com:443 matches https://example.com)", () => {
+    const win = createMockWindow();
+    const ch = createChannel(win as any, {
+      injectClient: false,
+      schemas: testSchemas,
+      trustedOrigins: ["https://example.com:443"],
+    });
+
+    const received: string[] = [];
+    ch.on("ping", (msg) => received.push(msg));
+
+    win._simulateIncoming(
+      JSON.stringify({ $ch: "ping", p: "port-normalized" }),
+      "https://example.com/page",
+    );
+
+    expect(received).toEqual(["port-normalized"]);
+  });
+
+  test("normalizes default port for http (http://example.com:80 matches http://example.com)", () => {
+    const win = createMockWindow();
+    const ch = createChannel(win as any, {
+      injectClient: false,
+      schemas: testSchemas,
+      trustedOrigins: ["http://example.com:80"],
+    });
+
+    const received: string[] = [];
+    ch.on("ping", (msg) => received.push(msg));
+
+    win._simulateIncoming(
+      JSON.stringify({ $ch: "ping", p: "http-port" }),
+      "http://example.com/page",
+    );
+
+    expect(received).toEqual(["http-port"]);
+  });
+
+  test("malformed trusted origins are silently filtered out", () => {
+    const win = createMockWindow();
+    const ch = createChannel(win as any, {
+      injectClient: false,
+      schemas: testSchemas,
+      trustedOrigins: ["not-a-url", "https://valid.com", ":::bad"],
+    });
+
+    const received: string[] = [];
+    ch.on("ping", (msg) => received.push(msg));
+
+    // Valid origin should still work
+    win._simulateIncoming(
+      JSON.stringify({ $ch: "ping", p: "ok" }),
+      "https://valid.com/page",
+    );
+
+    expect(received).toEqual(["ok"]);
+  });
+
+  test("re-injects on page load with case-normalized origin", () => {
+    const win = createMockWindow();
+    createChannel(win as any, {
+      schemas: testSchemas,
+      trustedOrigins: ["HTTPS://MYAPP.COM"],
+    });
+
+    const initialCount = win._evaluated.length;
+
+    win._simulatePageLoad("finished", "https://myapp.com/page");
+    expect(win._evaluated.length).toBe(initialCount + 1);
+  });
 });
 
 // ── Zod schema validation ─────────────────────────────────────────

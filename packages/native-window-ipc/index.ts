@@ -285,7 +285,25 @@ function decode(raw: string, maxSize: number = MAX_MESSAGE_SIZE): Envelope | nul
 }
 
 /**
+ * Normalize an origin string using the WHATWG URL Standard.
+ * Lowercases scheme/host, strips default ports (80/443), and
+ * strips userinfo — matching the Rust `url` crate behavior.
+ * Returns `null` for malformed URLs or opaque origins.
+ * @internal
+ */
+function normalizeOrigin(origin: string): string | null {
+  try {
+    const o = new URL(origin).origin;
+    return o === "null" ? null : o;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Check if a URL's origin matches any of the trusted origins.
+ * The `trustedOrigins` array must already be normalized via
+ * {@link normalizeOrigin} for correct comparison.
  * @internal
  */
 function isOriginTrusted(url: string, trustedOrigins: string[]): boolean {
@@ -402,6 +420,13 @@ export function createChannel<S extends SchemaMap>(
     ? Math.random().toString(36).slice(2, 10)
     : (channelIdOpt ?? "");
 
+  // Normalize trusted origins using WHATWG URL Standard so that
+  // "HTTPS://Example.Com:443" is stored as "https://example.com".
+  // This mirrors the Rust-side normalization via the `url` crate.
+  const normalizedOrigins = trustedOrigins
+    ?.map(normalizeOrigin)
+    .filter((o): o is string => o !== null);
+
   // Channel prefix helpers
   const prefixCh = (type: string): string =>
     channelId ? `${channelId}:${type}` : type;
@@ -436,8 +461,8 @@ export function createChannel<S extends SchemaMap>(
     if (eventType === null) return;
 
     // Reject messages from untrusted origins when trustedOrigins is set
-    if (trustedOrigins && trustedOrigins.length > 0) {
-      if (!isOriginTrusted(sourceUrl, trustedOrigins)) return;
+    if (normalizedOrigins && normalizedOrigins.length > 0) {
+      if (!isOriginTrusted(sourceUrl, normalizedOrigins)) return;
     }
 
     const set = listeners.get(eventType);
@@ -467,7 +492,7 @@ export function createChannel<S extends SchemaMap>(
     // when trustedOrigins is set, defer injection to the first
     // trusted page load to avoid exposing the IPC bridge to
     // untrusted origins before the first navigation completes.
-    if (!trustedOrigins || trustedOrigins.length === 0) {
+    if (!normalizedOrigins || normalizedOrigins.length === 0) {
       win.unsafe.evaluateJs(getClientScript({ channelId: channelId || undefined }));
     }
 
@@ -476,8 +501,8 @@ export function createChannel<S extends SchemaMap>(
       if (event !== "finished") return;
 
       // If trustedOrigins is set, only inject for matching origins
-      if (trustedOrigins && trustedOrigins.length > 0) {
-        if (!isOriginTrusted(url, trustedOrigins)) return;
+      if (normalizedOrigins && normalizedOrigins.length > 0) {
+        if (!isOriginTrusted(url, normalizedOrigins)) return;
       }
 
       win.unsafe.evaluateJs(getClientScript({ channelId: channelId || undefined }));
