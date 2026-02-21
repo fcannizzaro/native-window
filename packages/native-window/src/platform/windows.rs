@@ -65,6 +65,11 @@ thread_local! {
     /// scheme blocking for our own navigations.
     static PROGRAMMATIC_NAV: std::cell::RefCell<std::collections::HashSet<u32>> =
         std::cell::RefCell::new(std::collections::HashSet::new());
+    /// Tracks which windows have HTML content loaded (via NavigateToString).
+    /// Used by the NavigationCompleted handler to substitute the synthetic base
+    /// URL when WebView2 reports about:blank for HTML content.
+    static LOADED_HTML_WIN: std::cell::RefCell<std::collections::HashSet<u32>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
 }
 
 impl WindowsPlatform {
@@ -547,7 +552,7 @@ impl WindowsPlatform {
                                 &webview2_com::NavigationCompletedEventHandler::create(
                                     Box::new(move |webview, _args| {
                                         // Get current URL from the webview
-                                        let url = if let Some(ref wv) = webview {
+                                        let mut url = if let Some(ref wv) = webview {
                                             let mut source = PWSTR::null();
                                             match wv.Source(&mut source) {
                                                 Ok(()) => {
@@ -562,6 +567,16 @@ impl WindowsPlatform {
                                         } else {
                                             String::new()
                                         };
+
+                                        // WebView2 reports about:blank for NavigateToString content.
+                                        // Substitute the synthetic base URL so that trustedOrigins
+                                        // checks in the IPC layer see the correct origin.
+                                        if url == "about:blank" {
+                                            let has_html = LOADED_HTML_WIN.with(|h| h.borrow().contains(&nav_complete_id));
+                                            if has_html {
+                                                url = "https://native-window.local/".to_string();
+                                            }
+                                        }
 
                                         // Fire onPageLoad("finished", url)
                                         crate::window_manager::PENDING_PAGE_LOADS.with(|p| {
@@ -622,6 +637,7 @@ impl WindowsPlatform {
         }
 
         entry.loaded_content = Some(LoadedContent::Url);
+        LOADED_HTML_WIN.with(|h| { h.borrow_mut().remove(&id); });
         Ok(())
     }
 
@@ -648,6 +664,7 @@ impl WindowsPlatform {
         }
 
         entry.loaded_content = Some(LoadedContent::Html(html.to_string()));
+        LOADED_HTML_WIN.with(|h| { h.borrow_mut().insert(id); });
         Ok(())
     }
 
@@ -789,6 +806,9 @@ impl WindowsPlatform {
             o.borrow_mut().remove(&id);
         });
         crate::window_manager::ALLOWED_HOSTS_MAP.with(|h| {
+            h.borrow_mut().remove(&id);
+        });
+        LOADED_HTML_WIN.with(|h| {
             h.borrow_mut().remove(&id);
         });
         Ok(())

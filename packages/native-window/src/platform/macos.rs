@@ -315,7 +315,7 @@ define_class!(
             _navigation: Option<&WKNavigation>,
         ) {
             let window_id = *self.ivars();
-            let url = unsafe {
+            let mut url = unsafe {
                 let url_obj: Option<Retained<objc2_foundation::NSURL>> =
                     msg_send![web_view, URL];
                 url_obj
@@ -325,6 +325,15 @@ define_class!(
                     })
                     .unwrap_or_default()
             };
+            // WKWebView reports about:blank for loadHTMLString:baseURL: content.
+            // Substitute the synthetic base URL so that trustedOrigins checks
+            // in the IPC layer see the correct origin.
+            if url == "about:blank" {
+                let has_html = LOADED_HTML.with(|h| h.borrow().contains_key(&window_id));
+                if has_html {
+                    url = "https://native-window.local/".to_string();
+                }
+            }
             crate::window_manager::PENDING_PAGE_LOADS.with(|p| {
                 p.borrow_mut()
                     .push((window_id, "finished".to_string(), url));
