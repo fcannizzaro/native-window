@@ -2,6 +2,7 @@
   "pages": [
     "index",
     "getting-started",
+    "use-cases",
     "---API---",
     "native-window",
     "ipc",
