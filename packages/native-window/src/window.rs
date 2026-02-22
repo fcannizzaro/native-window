@@ -329,6 +329,19 @@ impl NativeWindow {
         Ok(())
     }
 
+    /// Set the window icon from a PNG or ICO file path.
+    /// On macOS this is silently ignored.
+    #[napi]
+    pub fn set_icon(&self, path: String) -> Result<()> {
+        with_manager(|mgr| {
+            mgr.push_command(Command::SetIcon {
+                id: self.id,
+                path,
+            });
+        });
+        Ok(())
+    }
+
     // ---- Event handlers ----
 
     /// Register a handler for IPC messages from the webview.

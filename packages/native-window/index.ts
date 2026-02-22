@@ -10,9 +10,10 @@ import {
   NativeWindow as _NativeWindow,
   checkRuntime,
   ensureRuntime,
+  loadHtmlOrigin,
 } from "./native-window.js";
 
-export { checkRuntime, ensureRuntime };
+export { checkRuntime, ensureRuntime, loadHtmlOrigin };
 
 export type { WindowOptions, RuntimeInfo } from "./native-window.js";
 
@@ -270,6 +271,16 @@ export class NativeWindow {
   setAlwaysOnTop(alwaysOnTop: boolean): void {
     this._ensureOpen();
     this._native.setAlwaysOnTop(alwaysOnTop);
+  }
+
+  /**
+   * Set the window icon from a PNG or ICO file path.
+   * On macOS this is silently ignored (macOS doesn't support per-window icons).
+   * Relative paths resolve from the working directory.
+   */
+  setIcon(path: string): void {
+    this._ensureOpen();
+    this._native.setIcon(path);
   }
 
   // ---- Window state ----

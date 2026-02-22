@@ -61,7 +61,7 @@ pub struct WindowOptions {
     /// example.com (and example.com itself). When unset or empty, all hosts
     /// are allowed.
     ///
-    /// Internal navigations (`about:blank`, `native-window.local`, `nativewindow.localhost`) are
+    /// Internal navigations (`about:blank`, `nativewindow://localhost`, `nativewindow.localhost`) are
     /// always permitted regardless of this setting.
     pub allowed_hosts: Option<Vec<String>>,
     /// Allow the webview to access the camera when requested.
@@ -77,6 +77,10 @@ pub struct WindowOptions {
     /// Allow the webview to access geolocation when requested.
     /// Default: false (navigator.geolocation is removed from the page).
     pub allow_geolocation: Option<bool>,
+    /// Path to a PNG or ICO file for the window icon (title bar).
+    /// On macOS this option is silently ignored (macOS doesn't support
+    /// per-window icons). Relative paths resolve from the working directory.
+    pub icon: Option<String>,
 }
 
 impl Default for WindowOptions {
@@ -104,6 +108,7 @@ impl Default for WindowOptions {
             allow_microphone: None,
             allow_file_system: None,
             allow_geolocation: None,
+            icon: None,
         }
     }
 }

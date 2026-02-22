@@ -120,6 +120,10 @@ pub enum Command {
         id: u32,
         url: Option<String>,
     },
+    SetIcon {
+        id: u32,
+        path: String,
+    },
 }
 
 /// Global window manager state. Lives in thread_local storage.
@@ -271,24 +275,42 @@ pub fn remove_html_content(window_id: u32) {
     });
 }
 
+/// The custom protocol scheme used by `loadHtml()` content.
+const CUSTOM_SCHEME: &str = "nativewindow";
+
 /// Extract the origin (scheme + host + port) from a URL string using the
 /// WHATWG URL Standard (`url` crate). Returns `None` for malformed URLs or
-/// URLs with opaque origins (e.g. `file:`, `data:`, `blob:`, custom schemes).
+/// URLs with opaque origins (e.g. `file:`, `data:`, `blob:`).
 ///
 /// The returned origin string is fully normalized:
 ///   - Scheme and host are lowercased
 ///   - Default ports are stripped (80 for http, 443 for https)
 ///   - Userinfo is stripped
 ///   - IPv6 addresses are handled correctly
+///
+/// **Custom scheme handling:** The `url` crate treats all non-special schemes
+/// (including our `nativewindow://`) as having opaque origins. We special-case
+/// the `nativewindow` scheme and manually construct `scheme://host` so that
+/// `trustedOrigins` matching works correctly on macOS/Linux where `loadHtml()`
+/// content is served at `nativewindow://localhost/`.
 pub fn extract_origin(raw: &str) -> Option<String> {
     let parsed = url::Url::parse(raw).ok()?;
     let origin = parsed.origin();
     let serialized = origin.ascii_serialization();
-    // Opaque origins serialize as "null" — treat as no valid origin.
-    if serialized == "null" {
-        return None;
+    if serialized != "null" {
+        return Some(serialized);
     }
-    Some(serialized)
+    // The `url` crate treats custom schemes as having opaque origins.
+    // For our own custom protocol, manually construct the origin from
+    // the parsed scheme + host so that trustedOrigins matching works
+    // correctly on macOS/Linux where loadHtml() content is served at
+    // nativewindow://localhost/.
+    if parsed.scheme() == CUSTOM_SCHEME {
+        if let Some(host) = parsed.host_str() {
+            return Some(format!("{}://{}", parsed.scheme(), host));
+        }
+    }
+    None
 }
 
 /// Check if a source URL's origin matches any of the trusted origins for a window.
@@ -352,7 +374,7 @@ fn extract_host(url: &str) -> Option<&str> {
 /// Check if a URL's host is permitted by the window's `allowedHosts` list.
 /// Returns `true` if:
 ///   - No `allowed_hosts` are configured for this window (allow all)
-///   - The URL is an internal URL (`about:blank`, `native-window.local`, `nativewindow.localhost`)
+///   - The URL is an internal URL (`about:blank`, `nativewindow://localhost`, `nativewindow.localhost`)
 ///   - The URL's host matches one of the allowed patterns
 ///
 /// Pattern matching (case-insensitive):
@@ -364,7 +386,6 @@ pub fn is_host_allowed(window_id: u32, url: &str) -> bool {
     let lower = url.to_lowercase();
     if lower.starts_with("about:")
         || lower.starts_with("nativewindow:")
-        || lower.contains("native-window.local")
         || lower.contains("nativewindow.localhost")
     {
         return true;

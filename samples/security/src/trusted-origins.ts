@@ -15,13 +15,17 @@
  * untrusted page, no IPC messages can reach the host application.
  *
  * @security **Example only.** In production, set `trustedOrigins` to
- * your own domain(s). The `https://native-window.local` origin is used
- * here because `loadHtml()` content uses that synthetic base URL on macOS.
+ * your own domain(s). The `loadHtmlOrigin()` helper returns the correct
+ * origin for the current platform (`nativewindow://localhost` on macOS/Linux,
+ * `https://nativewindow.localhost` on Windows).
  *
  * Run: bun samples/security/src/trusted-origins.ts
  */
 import { z } from "zod";
 import { createWindow } from "@fcannizzaro/native-window-ipc";
+import { loadHtmlOrigin } from "@fcannizzaro/native-window";
+
+const origin = loadHtmlOrigin();
 
 const schemas = {
   /** Webview -> Host: ping request */
@@ -38,12 +42,12 @@ const ch = createWindow(
     decorations: true,
     devtools: true, 
     // Layer 1: native-level origin filtering
-    trustedOrigins: ["https://native-window.local"],
+    trustedOrigins: [origin],
   },
   {
     schemas,
     // Layer 2: IPC-level origin filtering + client injection gating
-    trustedOrigins: ["https://native-window.local"],
+    trustedOrigins: [origin],
     onValidationError: (type, payload) => {
       console.warn(`[Bun] Invalid "${type}" payload:`, payload);
     },
@@ -162,12 +166,12 @@ ch.window.loadHtml(`
     <div class="layer-card">
       <h3><span class="layer-num">1</span> Native Layer</h3>
       <p>The Rust addon checks the source URL origin of every incoming IPC message. Untrusted messages are silently dropped before any JavaScript runs.</p>
-      <code>trustedOrigins: ["https://native-window.local"]</code>
+      <code>trustedOrigins: ["${origin}"]</code>
     </div>
     <div class="layer-card">
       <h3><span class="layer-num">2</span> IPC Layer</h3>
       <p>The TypeScript channel filters messages again and only injects the client script into pages from trusted origins. Untrusted pages never get the IPC bridge.</p>
-      <code>trustedOrigins: ["https://native-window.local"]</code>
+      <code>trustedOrigins: ["${origin}"]</code>
     </div>
   </div>
 
@@ -244,5 +248,5 @@ ch.window.onClose(() => {
 });
 
 console.log("[Bun] Trusted origins demo created. Close the window to exit.");
-console.log("[Bun] Native trustedOrigins: [https://native-window.local]");
-console.log("[Bun] IPC trustedOrigins:    [https://native-window.local]");
+console.log(`[Bun] Native trustedOrigins: [${origin}]`);
+console.log(`[Bun] IPC trustedOrigins:    [${origin}]`);

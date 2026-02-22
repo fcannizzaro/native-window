@@ -18,6 +18,25 @@ use window_manager::{
     PENDING_PAGE_LOADS, PENDING_RELOADS, PENDING_RESIZE_CALLBACKS, PENDING_TITLE_CHANGES,
 };
 
+/// Returns the origin of pages loaded via `loadHtml()`.
+///
+/// This is the origin string to use in `trustedOrigins` when restricting
+/// IPC messages to only accept messages from `loadHtml()` content.
+///
+/// - macOS/Linux: `"nativewindow://localhost"`
+/// - Windows: `"https://nativewindow.localhost"`
+#[napi]
+pub fn load_html_origin() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        "https://nativewindow.localhost".to_string()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "nativewindow://localhost".to_string()
+    }
+}
+
 /// Initialize the native window system.
 /// Must be called once before creating any windows.
 #[napi]

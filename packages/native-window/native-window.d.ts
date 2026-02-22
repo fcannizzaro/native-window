@@ -96,6 +96,12 @@ export interface WindowOptions {
    * Default: false (navigator.geolocation is removed from the page).
    */
   allowGeolocation?: boolean;
+  /**
+   * Path to a PNG or ICO file for the window icon (title bar).
+   * On macOS this option is silently ignored (macOS doesn't support
+   * per-window icons). Relative paths resolve from the working directory.
+   */
+  icon?: string;
 }
 
 export class NativeWindow {
@@ -119,6 +125,8 @@ export class NativeWindow {
   setResizable(resizable: boolean): void;
   setDecorations(decorations: boolean): void;
   setAlwaysOnTop(alwaysOnTop: boolean): void;
+  /** Set the window icon from a PNG or ICO file path. Ignored on macOS. */
+  setIcon(path: string): void;
 
   // Window state
   show(): void;
@@ -211,3 +219,23 @@ export function ensureRuntime(): RuntimeInfo;
  * ```
  */
 export function sanitizeForJs(input: string): string;
+
+/**
+ * Returns the origin of pages loaded via `loadHtml()`.
+ *
+ * Use this in `trustedOrigins` to restrict IPC messages to only accept
+ * messages from `loadHtml()` content.
+ *
+ * - macOS/Linux: `"nativewindow://localhost"`
+ * - Windows: `"https://nativewindow.localhost"`
+ *
+ * @example
+ * ```ts
+ * import { NativeWindow, loadHtmlOrigin } from "@fcannizzaro/native-window";
+ *
+ * const win = new NativeWindow({
+ *   trustedOrigins: [loadHtmlOrigin()],
+ * });
+ * ```
+ */
+export function loadHtmlOrigin(): string;

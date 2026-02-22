@@ -44,6 +44,24 @@ fn custom_protocol_url() -> &'static str {
     { "nativewindow://localhost/" }
 }
 
+/// Load a window icon from a PNG or ICO file path.
+///
+/// ICO files: the entry with the highest color depth and largest size
+/// is automatically selected by the image decoder.
+/// Relative paths are resolved against the process working directory.
+///
+/// On macOS this is a no-op (macOS doesn't support per-window icons).
+#[cfg(not(target_os = "macos"))]
+fn load_icon_from_path(path: &str) -> napi::Result<tao::window::Icon> {
+    let img = image::open(path)
+        .map_err(|e| napi::Error::from_reason(format!("Failed to load icon '{}': {}", path, e)))?;
+    let rgba = img.into_rgba8();
+    let (width, height) = rgba.dimensions();
+    let pixels = rgba.into_raw();
+    tao::window::Icon::from_rgba(pixels, width, height)
+        .map_err(|e| napi::Error::from_reason(format!("Failed to create icon: {}", e)))
+}
+
 // ── Types ──────────────────────────────────────────────────────
 
 /// A window + webview pair managed by the platform.
@@ -226,6 +244,17 @@ impl Platform {
                     });
                 }
             }
+            Command::SetIcon { id, path } => {
+                // macOS doesn't support per-window icons; silently ignore.
+                let _ = (&id, &path);
+                #[cfg(not(target_os = "macos"))]
+                if let Some(entry) = self.windows.get(&id) {
+                    match load_icon_from_path(&path) {
+                        Ok(icon) => { entry.window.set_window_icon(Some(icon)); }
+                        Err(e) => eprintln!("[native-window] Warning: {}", e),
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -320,6 +349,15 @@ impl Platform {
 
             let window = win_builder.build(event_loop)
                 .map_err(|e| napi::Error::from_reason(format!("Failed to create window: {}", e)))?;
+
+            // Set window icon from file path (Windows/Linux only; no-op on macOS)
+            #[cfg(not(target_os = "macos"))]
+            if let Some(ref icon_path) = options.icon {
+                match load_icon_from_path(icon_path) {
+                    Ok(icon) => { window.set_window_icon(Some(icon)); }
+                    Err(e) => eprintln!("[native-window] Warning: {}", e),
+                }
+            }
 
             // ── Build the wry webview ──────────────────────────
             let window_id = id; // Capture for closures

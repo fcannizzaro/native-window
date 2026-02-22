@@ -21,6 +21,10 @@ windows = { version = "0.61", features = [
   "Win32_System_Com",
 ] }
 
+# Windows/Linux-only: icon loading (PNG/ICO decoding)
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+image = { version = "0.25", default-features = false, features = ["ico", "png"] }
+
 # macOS-only: raw NSApp event drain for reliable WebKit event processing
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = "0.3"
