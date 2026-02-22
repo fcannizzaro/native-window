@@ -420,12 +420,16 @@ impl Platform {
                 });
             });
 
-            // JS-level dangerous-scheme blocking — patches Location.prototype so
-            // that javascript:, data:, file:, and blob: URIs assigned via
-            // location.href / assign() / replace() are silently dropped.
+            // JS-level dangerous-scheme blocking — comprehensive patches to prevent
+            // javascript:, data:, file:, and blob: URIs from executing in the webview.
             // This is necessary because WebView2 on Windows does NOT fire its
             // NavigationStarting event for javascript: URIs set via JS, so the
             // native navigation handler below never sees them.
+            //
+            // Covers: Location.prototype (href/assign/replace), <a>/<area> clicks,
+            // HTMLAnchorElement.href, HTMLAreaElement.href, HTMLIFrameElement.src,
+            // HTMLFormElement.action setters, and a MutationObserver for dynamically
+            // injected elements.
             wv_builder = wv_builder.with_initialization_script(
                 r#"(function () {
   var BLOCKED_SCHEMES = ["javascript:", "data:", "file:", "blob:"];
@@ -436,6 +440,8 @@ impl Platform {
       return lower.startsWith(scheme);
     });
   }
+
+  // ---- Location.prototype patches ----
 
   // Patch Location.prototype.href setter
   var desc = Object.getOwnPropertyDescriptor(Location.prototype, "href");
@@ -462,6 +468,67 @@ impl Platform {
   Location.prototype.replace = function (url) {
     if (!isBlocked(url)) originalReplace.call(this, url);
   };
+
+  // ---- Click listener for <a>/<area> with blocked-scheme hrefs ----
+  // Capturing phase so it fires before any page-level handlers.
+  // Walks up the DOM to handle clicks on child elements inside anchors.
+  document.addEventListener("click", function (e) {
+    var t = e.target;
+    while (t && t !== document) {
+      if ((t.tagName === "A" || t.tagName === "AREA") && t.href && isBlocked(t.href)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
+      t = t.parentElement;
+    }
+  }, true);
+
+  // ---- DOM property setter patches ----
+  // Block setting dangerous-scheme URLs on element properties that
+  // can trigger navigation or script execution.
+  function patchSetter(proto, prop) {
+    var d = Object.getOwnPropertyDescriptor(proto, prop);
+    if (d && d.set) {
+      var orig = d.set;
+      Object.defineProperty(proto, prop, {
+        set: function (v) { if (!isBlocked(v)) orig.call(this, v); },
+        get: d.get,
+        enumerable: d.enumerable,
+        configurable: d.configurable,
+      });
+    }
+  }
+  patchSetter(HTMLAnchorElement.prototype, "href");
+  patchSetter(HTMLAreaElement.prototype, "href");
+  patchSetter(HTMLIFrameElement.prototype, "src");
+  patchSetter(HTMLFormElement.prototype, "action");
+
+  // ---- MutationObserver for dynamically injected elements ----
+  // Sanitizes elements added via innerHTML, insertAdjacentHTML, etc.
+  function sanitize(el) {
+    var tag = el.tagName;
+    if ((tag === "A" || tag === "AREA") && el.hasAttribute("href") && isBlocked(el.getAttribute("href"))) {
+      el.removeAttribute("href");
+    } else if (tag === "IFRAME" && el.hasAttribute("src") && isBlocked(el.getAttribute("src"))) {
+      el.removeAttribute("src");
+    } else if (tag === "FORM" && el.hasAttribute("action") && isBlocked(el.getAttribute("action"))) {
+      el.removeAttribute("action");
+    }
+  }
+  var root = document.documentElement || document;
+  new MutationObserver(function (mutations) {
+    mutations.forEach(function (m) {
+      m.addedNodes.forEach(function (n) {
+        if (n.nodeType === 1) {
+          sanitize(n);
+          if (n.querySelectorAll) {
+            n.querySelectorAll("a[href],area[href],iframe[src],form[action]").forEach(sanitize);
+          }
+        }
+      });
+    });
+  }).observe(root, { childList: true, subtree: true });
 })();"#
             );
 
