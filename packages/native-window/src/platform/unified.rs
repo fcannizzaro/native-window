@@ -416,6 +416,51 @@ impl Platform {
                 });
             });
 
+            // JS-level dangerous-scheme blocking — patches Location.prototype so
+            // that javascript:, data:, file:, and blob: URIs assigned via
+            // location.href / assign() / replace() are silently dropped.
+            // This is necessary because WebView2 on Windows does NOT fire its
+            // NavigationStarting event for javascript: URIs set via JS, so the
+            // native navigation handler below never sees them.
+            wv_builder = wv_builder.with_initialization_script(
+                r#"(function () {
+  var BLOCKED_SCHEMES = ["javascript:", "data:", "file:", "blob:"];
+
+  function isBlocked(url) {
+    var lower = (url + "").trim().toLowerCase();
+    return BLOCKED_SCHEMES.some(function (scheme) {
+      return lower.startsWith(scheme);
+    });
+  }
+
+  // Patch Location.prototype.href setter
+  var desc = Object.getOwnPropertyDescriptor(Location.prototype, "href");
+  if (desc && desc.set) {
+    var originalSet = desc.set;
+    Object.defineProperty(Location.prototype, "href", {
+      set: function (value) {
+        if (!isBlocked(value)) originalSet.call(this, value);
+      },
+      get: desc.get,
+      enumerable: desc.enumerable,
+      configurable: desc.configurable,
+    });
+  }
+
+  // Patch Location.prototype.assign
+  var originalAssign = Location.prototype.assign;
+  Location.prototype.assign = function (url) {
+    if (!isBlocked(url)) originalAssign.call(this, url);
+  };
+
+  // Patch Location.prototype.replace
+  var originalReplace = Location.prototype.replace;
+  Location.prototype.replace = function (url) {
+    if (!isBlocked(url)) originalReplace.call(this, url);
+  };
+})();"#
+            );
+
             // Navigation handler — block dangerous schemes + enforce allowedHosts
             wv_builder = wv_builder.with_navigation_handler(move |url: String| {
                 let lower = url.to_lowercase();
