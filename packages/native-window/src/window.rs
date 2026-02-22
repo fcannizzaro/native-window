@@ -5,8 +5,8 @@ use napi_derive::napi;
 
 use crate::options::WindowOptions;
 use crate::window_manager::{
-    extract_origin, with_manager, Command, PermissionFlags,
-    ALLOWED_HOSTS_MAP, PERMISSIONS_MAP, TRUSTED_ORIGINS_MAP,
+    extract_origin, with_manager, Command, PermissionFlags, ALLOWED_HOSTS_MAP, PERMISSIONS_MAP,
+    TRUSTED_ORIGINS_MAP,
 };
 
 /// A native OS window with an embedded webview.
@@ -35,10 +35,8 @@ impl NativeWindow {
             // user-provided values like "HTTPS://Example.Com:443" are
             // stored as "https://example.com" (WHATWG URL Standard).
             if let Some(ref origins) = opts.trusted_origins {
-                let normalized: Vec<String> = origins
-                    .iter()
-                    .filter_map(|o| extract_origin(o))
-                    .collect();
+                let normalized: Vec<String> =
+                    origins.iter().filter_map(|o| extract_origin(o)).collect();
                 if !normalized.is_empty() {
                     TRUSTED_ORIGINS_MAP.with(|o| {
                         o.borrow_mut().insert(id, normalized);
@@ -65,10 +63,7 @@ impl NativeWindow {
             PERMISSIONS_MAP.with(|p| {
                 p.borrow_mut().insert(id, permissions);
             });
-            mgr.push_command(Command::CreateWindow {
-                id,
-                options: opts,
-            });
+            mgr.push_command(Command::CreateWindow { id, options: opts });
             Ok(id)
         })?;
 
@@ -112,10 +107,7 @@ impl NativeWindow {
     #[napi]
     pub fn load_html(&self, html: String) -> Result<()> {
         with_manager(|mgr| {
-            mgr.push_command(Command::LoadHTML {
-                id: self.id,
-                html,
-            });
+            mgr.push_command(Command::LoadHTML { id: self.id, html });
         });
         Ok(())
     }
@@ -140,7 +132,10 @@ impl NativeWindow {
         // Use json_escape() for safe embedding — handles all control chars,
         // quotes, backslashes, and </script> in a single pass.
         let safe_msg = crate::window_manager::json_escape(&message);
-        let script = format!("if(window.__native_message__)window.__native_message__({});", safe_msg);
+        let script = format!(
+            "if(window.__native_message__)window.__native_message__({});",
+            safe_msg
+        );
         with_manager(|mgr| {
             mgr.push_command(Command::EvaluateJS {
                 id: self.id,
@@ -156,10 +151,7 @@ impl NativeWindow {
     #[napi]
     pub fn set_title(&self, title: String) -> Result<()> {
         with_manager(|mgr| {
-            mgr.push_command(Command::SetTitle {
-                id: self.id,
-                title,
-            });
+            mgr.push_command(Command::SetTitle { id: self.id, title });
         });
         Ok(())
     }
@@ -207,11 +199,7 @@ impl NativeWindow {
     #[napi]
     pub fn set_position(&self, x: f64, y: f64) -> Result<()> {
         with_manager(|mgr| {
-            mgr.push_command(Command::SetPosition {
-                id: self.id,
-                x,
-                y,
-            });
+            mgr.push_command(Command::SetPosition { id: self.id, x, y });
         });
         Ok(())
     }
@@ -329,10 +317,7 @@ impl NativeWindow {
     #[napi]
     pub fn set_icon(&self, path: String) -> Result<()> {
         with_manager(|mgr| {
-            mgr.push_command(Command::SetIcon {
-                id: self.id,
-                path,
-            });
+            mgr.push_command(Command::SetIcon { id: self.id, path });
         });
         Ok(())
     }
@@ -344,8 +329,8 @@ impl NativeWindow {
     /// The callback receives the message string and the source page URL.
     #[napi(ts_args_type = "callback: (message: string, sourceUrl: string) => void")]
     pub fn on_message(&self, callback: JsFunction) -> Result<()> {
-        let tsfn: ThreadsafeFunction<(String, String), ErrorStrategy::Fatal> =
-            callback.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<(String, String)>| {
+        let tsfn: ThreadsafeFunction<(String, String), ErrorStrategy::Fatal> = callback
+            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<(String, String)>| {
                 let message = ctx.env.create_string(&ctx.value.0)?;
                 let source_url = ctx.env.create_string(&ctx.value.1)?;
                 Ok(vec![message, source_url])
@@ -362,8 +347,8 @@ impl NativeWindow {
     /// Register a handler for the window close event.
     #[napi(ts_args_type = "callback: () => void")]
     pub fn on_close(&self, callback: JsFunction) -> Result<()> {
-        let tsfn: ThreadsafeFunction<(), ErrorStrategy::Fatal> =
-            callback.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<()>| {
+        let tsfn: ThreadsafeFunction<(), ErrorStrategy::Fatal> = callback
+            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<()>| {
                 ctx.env.get_undefined().map(|v| vec![v])
             })?;
 
@@ -378,8 +363,8 @@ impl NativeWindow {
     /// Register a handler for window resize events.
     #[napi(ts_args_type = "callback: (width: number, height: number) => void")]
     pub fn on_resize(&self, callback: JsFunction) -> Result<()> {
-        let tsfn: ThreadsafeFunction<(f64, f64), ErrorStrategy::Fatal> =
-            callback.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<(f64, f64)>| {
+        let tsfn: ThreadsafeFunction<(f64, f64), ErrorStrategy::Fatal> = callback
+            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<(f64, f64)>| {
                 let width = ctx.env.create_double(ctx.value.0)?;
                 let height = ctx.env.create_double(ctx.value.1)?;
                 Ok(vec![width, height])
@@ -396,8 +381,8 @@ impl NativeWindow {
     /// Register a handler for window move events.
     #[napi(ts_args_type = "callback: (x: number, y: number) => void")]
     pub fn on_move(&self, callback: JsFunction) -> Result<()> {
-        let tsfn: ThreadsafeFunction<(f64, f64), ErrorStrategy::Fatal> =
-            callback.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<(f64, f64)>| {
+        let tsfn: ThreadsafeFunction<(f64, f64), ErrorStrategy::Fatal> = callback
+            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<(f64, f64)>| {
                 let x = ctx.env.create_double(ctx.value.0)?;
                 let y = ctx.env.create_double(ctx.value.1)?;
                 Ok(vec![x, y])
@@ -414,8 +399,8 @@ impl NativeWindow {
     /// Register a handler for window focus events.
     #[napi(ts_args_type = "callback: () => void")]
     pub fn on_focus(&self, callback: JsFunction) -> Result<()> {
-        let tsfn: ThreadsafeFunction<(), ErrorStrategy::Fatal> =
-            callback.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<()>| {
+        let tsfn: ThreadsafeFunction<(), ErrorStrategy::Fatal> = callback
+            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<()>| {
                 ctx.env.get_undefined().map(|v| vec![v])
             })?;
 
@@ -430,8 +415,8 @@ impl NativeWindow {
     /// Register a handler for window blur (lost focus) events.
     #[napi(ts_args_type = "callback: () => void")]
     pub fn on_blur(&self, callback: JsFunction) -> Result<()> {
-        let tsfn: ThreadsafeFunction<(), ErrorStrategy::Fatal> =
-            callback.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<()>| {
+        let tsfn: ThreadsafeFunction<(), ErrorStrategy::Fatal> = callback
+            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<()>| {
                 ctx.env.get_undefined().map(|v| vec![v])
             })?;
 
@@ -446,8 +431,8 @@ impl NativeWindow {
     /// Register a handler for page load events.
     #[napi(ts_args_type = "callback: (event: 'started' | 'finished', url: string) => void")]
     pub fn on_page_load(&self, callback: JsFunction) -> Result<()> {
-        let tsfn: ThreadsafeFunction<(String, String), ErrorStrategy::Fatal> =
-            callback.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<(String, String)>| {
+        let tsfn: ThreadsafeFunction<(String, String), ErrorStrategy::Fatal> = callback
+            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<(String, String)>| {
                 let event_type = ctx.env.create_string(&ctx.value.0)?;
                 let url = ctx.env.create_string(&ctx.value.1)?;
                 Ok(vec![event_type, url])
@@ -464,8 +449,8 @@ impl NativeWindow {
     /// Register a handler for document title change events.
     #[napi(ts_args_type = "callback: (title: string) => void")]
     pub fn on_title_changed(&self, callback: JsFunction) -> Result<()> {
-        let tsfn: ThreadsafeFunction<String, ErrorStrategy::Fatal> =
-            callback.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<String>| {
+        let tsfn: ThreadsafeFunction<String, ErrorStrategy::Fatal> = callback
+            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<String>| {
                 ctx.env.create_string(ctx.value.as_str()).map(|v| vec![v])
             })?;
 
@@ -480,8 +465,8 @@ impl NativeWindow {
     /// Register a handler for the window reload event.
     #[napi(ts_args_type = "callback: () => void")]
     pub fn on_reload(&self, callback: JsFunction) -> Result<()> {
-        let tsfn: ThreadsafeFunction<(), ErrorStrategy::Fatal> =
-            callback.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<()>| {
+        let tsfn: ThreadsafeFunction<(), ErrorStrategy::Fatal> = callback
+            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<()>| {
                 ctx.env.get_undefined().map(|v| vec![v])
             })?;
 
@@ -497,8 +482,8 @@ impl NativeWindow {
     /// Fired when a navigation is blocked by the `allowedHosts` restriction.
     #[napi(ts_args_type = "callback: (url: string) => void")]
     pub fn on_navigation_blocked(&self, callback: JsFunction) -> Result<()> {
-        let tsfn: ThreadsafeFunction<String, ErrorStrategy::Fatal> =
-            callback.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<String>| {
+        let tsfn: ThreadsafeFunction<String, ErrorStrategy::Fatal> = callback
+            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<String>| {
                 ctx.env.create_string(ctx.value.as_str()).map(|v| vec![v])
             })?;
 
@@ -519,10 +504,7 @@ impl NativeWindow {
     #[napi]
     pub fn get_cookies(&self, url: Option<String>) -> Result<()> {
         with_manager(|mgr| {
-            mgr.push_command(Command::GetCookies {
-                id: self.id,
-                url,
-            });
+            mgr.push_command(Command::GetCookies { id: self.id, url });
         });
         Ok(())
     }
@@ -531,8 +513,8 @@ impl NativeWindow {
     /// The callback receives a JSON string containing an array of cookie objects.
     #[napi(ts_args_type = "callback: (cookies: string) => void")]
     pub fn on_cookies(&self, callback: JsFunction) -> Result<()> {
-        let tsfn: ThreadsafeFunction<String, ErrorStrategy::Fatal> =
-            callback.create_threadsafe_function(0, |ctx: ThreadSafeCallContext<String>| {
+        let tsfn: ThreadsafeFunction<String, ErrorStrategy::Fatal> = callback
+            .create_threadsafe_function(0, |ctx: ThreadSafeCallContext<String>| {
                 ctx.env.create_string(ctx.value.as_str()).map(|v| vec![v])
             })?;
 

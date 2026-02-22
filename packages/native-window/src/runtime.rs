@@ -182,7 +182,8 @@ fn ensure_runtime_windows() -> napi::Result<RuntimeInfo> {
             "-Command",
             &format!(
                 "Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing",
-                BOOTSTRAPPER_URL, installer_path_str.replace('\'', "''")
+                BOOTSTRAPPER_URL,
+                installer_path_str.replace('\'', "''")
             ),
         ])
         .output();

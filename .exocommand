@@ -5,6 +5,11 @@ build-native-addon:
   command: "bun napi build --release --platform"
   cwd: ./packages/native-window
 
+fmt-native-addon:
+  description: "Format the code for the native window module"
+  command: "cargo fmt --all"
+  cwd: ./packages/native-window/src
+
 clippy-native-addon:
   description: "Run Rust linter (clippy) for the native window module"
   command: "cargo clippy"

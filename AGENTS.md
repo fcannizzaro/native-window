@@ -6,7 +6,8 @@
 - Do **not** install Rust packages (`cargo install`, `cargo add`) or build the native addon, update only the `cargo.toml`.
 - To **build the addon** use the  tool `execute("build-native-addon")`.
 - To **run clippy** use the  tool `execute("clippy-native-addon")`.
-- After every new feature or fix remember to run both the linter and the native addon build.
+- To **run fmt** use the  tool `execute("fmt-native-addon")`.
+- After every new feature or fix remember to run both the linter, fmt and the native addon build.
 - The `native-window-ipc` package must remain **pure TypeScript** with zero runtime dependencies.
 
 ## Project Overview

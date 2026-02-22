@@ -112,8 +112,7 @@ pub fn pump_events() -> napi::Result<()> {
 
         // Snapshot which windows are pending close before flush drains
         // the buffer — we need the IDs for handler cleanup afterward.
-        let closed_ids: Vec<u32> =
-            PENDING_CLOSES.with(|p| p.borrow().clone());
+        let closed_ids: Vec<u32> = PENDING_CLOSES.with(|p| p.borrow().clone());
 
         flush_pending_callbacks(&mgr.event_handlers);
 
@@ -142,14 +141,16 @@ fn flush_pending_callbacks(
         }
         if let Some(handlers) = event_handlers.get(&window_id) {
             if let Some(ref cb) = handlers.on_message {
-                cb.call((message, source_url), ThreadsafeFunctionCallMode::NonBlocking);
+                cb.call(
+                    (message, source_url),
+                    ThreadsafeFunctionCallMode::NonBlocking,
+                );
             }
         }
     }
 
     // Flush any close events that were deferred during pump_events
-    let pending_closes: Vec<u32> =
-        PENDING_CLOSES.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    let pending_closes: Vec<u32> = PENDING_CLOSES.with(|p| std::mem::take(&mut *p.borrow_mut()));
     for window_id in pending_closes {
         if let Some(handlers) = event_handlers.get(&window_id) {
             if let Some(ref cb) = handlers.on_close {
@@ -159,8 +160,7 @@ fn flush_pending_callbacks(
     }
 
     // Flush any reload events that were deferred during pump_events (keyboard shortcuts)
-    let pending_reloads: Vec<u32> =
-        PENDING_RELOADS.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    let pending_reloads: Vec<u32> = PENDING_RELOADS.with(|p| std::mem::take(&mut *p.borrow_mut()));
     for window_id in pending_reloads {
         if let Some(handlers) = event_handlers.get(&window_id) {
             if let Some(ref cb) = handlers.on_reload {
@@ -192,8 +192,7 @@ fn flush_pending_callbacks(
     }
 
     // Flush any focus events that were deferred during pump_events
-    let pending_focuses: Vec<u32> =
-        PENDING_FOCUSES.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    let pending_focuses: Vec<u32> = PENDING_FOCUSES.with(|p| std::mem::take(&mut *p.borrow_mut()));
     for window_id in pending_focuses {
         if let Some(handlers) = event_handlers.get(&window_id) {
             if let Some(ref cb) = handlers.on_focus {
@@ -203,8 +202,7 @@ fn flush_pending_callbacks(
     }
 
     // Flush any blur events that were deferred during pump_events
-    let pending_blurs: Vec<u32> =
-        PENDING_BLURS.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    let pending_blurs: Vec<u32> = PENDING_BLURS.with(|p| std::mem::take(&mut *p.borrow_mut()));
     for window_id in pending_blurs {
         if let Some(handlers) = event_handlers.get(&window_id) {
             if let Some(ref cb) = handlers.on_blur {
@@ -219,10 +217,7 @@ fn flush_pending_callbacks(
     for (window_id, event_type, url) in pending_page_loads {
         if let Some(handlers) = event_handlers.get(&window_id) {
             if let Some(ref cb) = handlers.on_page_load {
-                cb.call(
-                    (event_type, url),
-                    ThreadsafeFunctionCallMode::NonBlocking,
-                );
+                cb.call((event_type, url), ThreadsafeFunctionCallMode::NonBlocking);
             }
         }
     }

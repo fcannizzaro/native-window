@@ -2,7 +2,6 @@
 ///
 /// Replaces the platform-specific `macos.rs` and `windows.rs` modules with a
 /// single implementation that works on macOS, Windows, and Linux.
-
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -12,19 +11,19 @@ use tao::event_loop::{ControlFlow, EventLoop};
 use tao::platform::run_return::EventLoopExtRunReturn;
 use tao::window::{Window, WindowBuilder};
 
-use wry::{WebView, WebViewBuilder};
 #[cfg(target_os = "linux")]
 use wry::WebViewBuilderExtUnix;
 #[cfg(target_os = "windows")]
 use wry::WebViewBuilderExtWindows;
+use wry::{WebView, WebViewBuilder};
 
 use crate::events::WindowEventHandlers;
 use crate::options::WindowOptions;
 use crate::window_manager::{
-    is_host_allowed, is_origin_trusted, json_escape, Command, MAX_PENDING_EVENTS,
-    EVENT_LOOP, PENDING_BLURS, PENDING_CLOSES, PENDING_COOKIES, PENDING_FOCUSES,
-    PENDING_MESSAGES, PENDING_MOVES, PENDING_NAVIGATION_BLOCKED,
-    PENDING_PAGE_LOADS, PENDING_RESIZE_CALLBACKS, PENDING_TITLE_CHANGES,
+    is_host_allowed, is_origin_trusted, json_escape, Command, EVENT_LOOP, MAX_PENDING_EVENTS,
+    PENDING_BLURS, PENDING_CLOSES, PENDING_COOKIES, PENDING_FOCUSES, PENDING_MESSAGES,
+    PENDING_MOVES, PENDING_NAVIGATION_BLOCKED, PENDING_PAGE_LOADS, PENDING_RESIZE_CALLBACKS,
+    PENDING_TITLE_CHANGES,
 };
 
 /// Maximum IPC message size (10 MB).
@@ -63,9 +62,13 @@ macro_rules! capped_push {
 /// does. So we must use the HTTPS-mapped URL directly on Windows.
 fn custom_protocol_url() -> &'static str {
     #[cfg(target_os = "windows")]
-    { "https://nativewindow.localhost/" }
+    {
+        "https://nativewindow.localhost/"
+    }
     #[cfg(not(target_os = "windows"))]
-    { "nativewindow://localhost/" }
+    {
+        "nativewindow://localhost/"
+    }
 }
 
 /// Load a window icon from a PNG or ICO file path.
@@ -136,7 +139,9 @@ impl Platform {
             }
             Command::LoadURL { id, url } => {
                 if let Some(entry) = self.windows.get(&id) {
-                    entry.webview.load_url(&url)
+                    entry
+                        .webview
+                        .load_url(&url)
                         .map_err(|e| napi::Error::from_reason(format!("load_url failed: {}", e)))?;
                     // Clear any stored HTML to prevent stale custom protocol responses
                     crate::window_manager::remove_html_content(id);
@@ -149,8 +154,9 @@ impl Platform {
                     // This gives the page a proper origin (secure context) and
                     // makes Cmd+R / browser-native reload work correctly.
                     crate::window_manager::set_html_content(id, html);
-                    entry.webview.load_url(custom_protocol_url())
-                        .map_err(|e| napi::Error::from_reason(format!("load_url (html) failed: {}", e)))?;
+                    entry.webview.load_url(custom_protocol_url()).map_err(|e| {
+                        napi::Error::from_reason(format!("load_url (html) failed: {}", e))
+                    })?;
                 }
             }
             Command::EvaluateJS { id, script } => {
@@ -170,12 +176,16 @@ impl Platform {
             }
             Command::SetMinSize { id, width, height } => {
                 if let Some(entry) = self.windows.get(&id) {
-                    entry.window.set_min_inner_size(Some(LogicalSize::new(width, height)));
+                    entry
+                        .window
+                        .set_min_inner_size(Some(LogicalSize::new(width, height)));
                 }
             }
             Command::SetMaxSize { id, width, height } => {
                 if let Some(entry) = self.windows.get(&id) {
-                    entry.window.set_max_inner_size(Some(LogicalSize::new(width, height)));
+                    entry
+                        .window
+                        .set_max_inner_size(Some(LogicalSize::new(width, height)));
                 }
             }
             Command::SetPosition { id, x, y } => {
@@ -248,18 +258,14 @@ impl Platform {
             Command::GetCookies { id, url } => {
                 if let Some(entry) = self.windows.get(&id) {
                     let json = match &url {
-                        Some(u) => {
-                            match entry.webview.cookies_for_url(u) {
-                                Ok(cookies) => serialize_cookies(&cookies),
-                                Err(_) => "[]".to_string(),
-                            }
-                        }
-                        None => {
-                            match entry.webview.cookies() {
-                                Ok(cookies) => serialize_cookies(&cookies),
-                                Err(_) => "[]".to_string(),
-                            }
-                        }
+                        Some(u) => match entry.webview.cookies_for_url(u) {
+                            Ok(cookies) => serialize_cookies(&cookies),
+                            Err(_) => "[]".to_string(),
+                        },
+                        None => match entry.webview.cookies() {
+                            Ok(cookies) => serialize_cookies(&cookies),
+                            Err(_) => "[]".to_string(),
+                        },
                     };
                     PENDING_COOKIES.with(|p| {
                         // Cookies always push — getCookies() promises need a response.
@@ -273,7 +279,9 @@ impl Platform {
                 #[cfg(not(target_os = "macos"))]
                 if let Some(entry) = self.windows.get(&id) {
                     match load_icon_from_path(&path) {
-                        Ok(icon) => { entry.window.set_window_icon(Some(icon)); }
+                        Ok(icon) => {
+                            entry.window.set_window_icon(Some(icon));
+                        }
                         Err(e) => eprintln!("[native-window] Warning: {}", e),
                     }
                 }
@@ -334,11 +342,7 @@ impl Platform {
     // ── Window creation ────────────────────────────────────────
 
     /// Create a new tao window + wry webview.
-    fn create_window(
-        &mut self,
-        id: u32,
-        options: &WindowOptions,
-    ) -> napi::Result<()> {
+    fn create_window(&mut self, id: u32, options: &WindowOptions) -> napi::Result<()> {
         EVENT_LOOP.with(|el| {
             let el_ref = el.borrow();
             let event_loop = el_ref.as_ref().ok_or_else(|| {
@@ -540,9 +544,13 @@ impl Platform {
             if let Some(ref csp) = options.csp {
                 let safe_csp = crate::window_manager::json_escape(csp);
                 let csp_script = format!(
-                    "document.addEventListener('DOMContentLoaded',function(){{var m=document.createElement('meta');\
-                    m.httpEquiv='Content-Security-Policy';m.content={};document.head.insertBefore(m,\
-                    document.head.firstChild)}},{{once:true}});",
+                    "\
+document.addEventListener('DOMContentLoaded', function () {{
+  var meta = document.createElement('meta');
+  meta.httpEquiv = 'Content-Security-Policy';
+  meta.content = {};
+  document.head.insertBefore(meta, document.head.firstChild);
+}}, {{ once: true }});",
                     safe_csp
                 );
                 wv_builder = wv_builder.with_initialization_script(&csp_script);
@@ -634,22 +642,36 @@ impl Platform {
                     *control_flow = ControlFlow::Poll;
 
                     match event {
-                        Event::WindowEvent { window_id, event: ref win_event, .. } => {
+                        Event::WindowEvent {
+                            window_id,
+                            event: ref win_event,
+                            ..
+                        } => {
                             if let Some(&id) = window_id_map.get(&window_id) {
                                 match win_event {
                                     WindowEvent::Resized(size) => {
-                                        let scale = windows.get(&id)
+                                        let scale = windows
+                                            .get(&id)
                                             .map(|e| e.window.scale_factor())
                                             .unwrap_or(1.0);
                                         let logical: LogicalSize<f64> = size.to_logical(scale);
-                                        capped_push!(PENDING_RESIZE_CALLBACKS, (id, logical.width, logical.height), "PENDING_RESIZE_CALLBACKS");
+                                        capped_push!(
+                                            PENDING_RESIZE_CALLBACKS,
+                                            (id, logical.width, logical.height),
+                                            "PENDING_RESIZE_CALLBACKS"
+                                        );
                                     }
                                     WindowEvent::Moved(pos) => {
-                                        let scale = windows.get(&id)
+                                        let scale = windows
+                                            .get(&id)
                                             .map(|e| e.window.scale_factor())
                                             .unwrap_or(1.0);
                                         let logical: LogicalPosition<f64> = pos.to_logical(scale);
-                                        capped_push!(PENDING_MOVES, (id, logical.x, logical.y), "PENDING_MOVES");
+                                        capped_push!(
+                                            PENDING_MOVES,
+                                            (id, logical.x, logical.y),
+                                            "PENDING_MOVES"
+                                        );
                                     }
                                     WindowEvent::Focused(focused) => {
                                         if *focused {
@@ -716,7 +738,9 @@ impl Platform {
 
         unsafe {
             let Some(mtm) = MainThreadMarker::new() else {
-                eprintln!("[native-window] drain_macos_events called from non-main thread; skipping");
+                eprintln!(
+                    "[native-window] drain_macos_events called from non-main thread; skipping"
+                );
                 return;
             };
             let app = NSApplication::sharedApplication(mtm);
@@ -780,10 +804,12 @@ fn serialize_cookies(cookies: &[wry::cookie::Cookie<'static>]) -> String {
         }
         let name = json_escape(cookie_jar.name());
         let value = json_escape(cookie_jar.value());
-        let domain = cookie_jar.domain()
+        let domain = cookie_jar
+            .domain()
             .map(|d| json_escape(d))
             .unwrap_or_else(|| "\"\"".to_string());
-        let path = cookie_jar.path()
+        let path = cookie_jar
+            .path()
             .map(|p| json_escape(p))
             .unwrap_or_else(|| "\"/\"".to_string());
         let http_only = cookie_jar.http_only().unwrap_or(false);
@@ -794,11 +820,10 @@ fn serialize_cookies(cookies: &[wry::cookie::Cookie<'static>]) -> String {
             Some(wry::cookie::SameSite::None) => "\"None\"",
             None => "null",
         };
-        let expires = cookie_jar.expires()
+        let expires = cookie_jar
+            .expires()
             .and_then(|e| match e {
-                wry::cookie::Expiration::DateTime(dt) => {
-                    Some(format!("{}", dt.unix_timestamp()))
-                }
+                wry::cookie::Expiration::DateTime(dt) => Some(format!("{}", dt.unix_timestamp())),
                 wry::cookie::Expiration::Session => None,
             })
             .map(|ts| ts)

@@ -30,100 +30,33 @@ impl Default for PermissionFlags {
 
 /// Read the permission flags for a window. Returns default (deny-all) if not found.
 pub fn get_permissions(window_id: u32) -> PermissionFlags {
-    PERMISSIONS_MAP.with(|p| {
-        p.borrow()
-            .get(&window_id)
-            .copied()
-            .unwrap_or_default()
-    })
+    PERMISSIONS_MAP.with(|p| p.borrow().get(&window_id).copied().unwrap_or_default())
 }
 
 /// Commands that can be sent to the window manager for execution during pump.
 pub enum Command {
-    CreateWindow {
-        id: u32,
-        options: WindowOptions,
-    },
-    LoadURL {
-        id: u32,
-        url: String,
-    },
-    LoadHTML {
-        id: u32,
-        html: String,
-    },
-    EvaluateJS {
-        id: u32,
-        script: String,
-    },
-    SetTitle {
-        id: u32,
-        title: String,
-    },
-    SetSize {
-        id: u32,
-        width: f64,
-        height: f64,
-    },
-    SetMinSize {
-        id: u32,
-        width: f64,
-        height: f64,
-    },
-    SetMaxSize {
-        id: u32,
-        width: f64,
-        height: f64,
-    },
-    SetPosition {
-        id: u32,
-        x: f64,
-        y: f64,
-    },
-    SetResizable {
-        id: u32,
-        resizable: bool,
-    },
-    SetDecorations {
-        id: u32,
-        decorations: bool,
-    },
-    SetAlwaysOnTop {
-        id: u32,
-        always_on_top: bool,
-    },
-    Show {
-        id: u32,
-    },
-    Hide {
-        id: u32,
-    },
-    Close {
-        id: u32,
-    },
-    Focus {
-        id: u32,
-    },
-    Maximize {
-        id: u32,
-    },
-    Minimize {
-        id: u32,
-    },
-    Unmaximize {
-        id: u32,
-    },
-    Reload {
-        id: u32,
-    },
-    GetCookies {
-        id: u32,
-        url: Option<String>,
-    },
-    SetIcon {
-        id: u32,
-        path: String,
-    },
+    CreateWindow { id: u32, options: WindowOptions },
+    LoadURL { id: u32, url: String },
+    LoadHTML { id: u32, html: String },
+    EvaluateJS { id: u32, script: String },
+    SetTitle { id: u32, title: String },
+    SetSize { id: u32, width: f64, height: f64 },
+    SetMinSize { id: u32, width: f64, height: f64 },
+    SetMaxSize { id: u32, width: f64, height: f64 },
+    SetPosition { id: u32, x: f64, y: f64 },
+    SetResizable { id: u32, resizable: bool },
+    SetDecorations { id: u32, decorations: bool },
+    SetAlwaysOnTop { id: u32, always_on_top: bool },
+    Show { id: u32 },
+    Hide { id: u32 },
+    Close { id: u32 },
+    Focus { id: u32 },
+    Maximize { id: u32 },
+    Minimize { id: u32 },
+    Unmaximize { id: u32 },
+    Reload { id: u32 },
+    GetCookies { id: u32, url: Option<String> },
+    SetIcon { id: u32, path: String },
 }
 
 /// Global window manager state. Lives in thread_local storage.
@@ -161,9 +94,10 @@ impl WindowManager {
     /// if overflow would occur.
     pub fn allocate_id(&mut self) -> napi::Result<u32> {
         let id = self.next_id;
-        self.next_id = self.next_id.checked_add(1).ok_or_else(|| {
-            napi::Error::from_reason("Window ID space exhausted (u32 overflow)")
-        })?;
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .ok_or_else(|| napi::Error::from_reason("Window ID space exhausted (u32 overflow)"))?;
         self.event_handlers.insert(id, WindowEventHandlers::new());
         Ok(id)
     }
@@ -275,9 +209,7 @@ pub fn set_html_content(window_id: u32, html: String) {
 
 /// Retrieve stored HTML content for a window's custom protocol handler.
 pub fn get_html_content(window_id: u32) -> Option<String> {
-    HTML_CONTENT_MAP.with(|m| {
-        m.borrow().get(&window_id).cloned()
-    })
+    HTML_CONTENT_MAP.with(|m| m.borrow().get(&window_id).cloned())
 }
 
 /// Remove stored HTML content for a window (called on close or loadUrl).
@@ -380,9 +312,7 @@ fn extract_host(url: &str) -> Option<String> {
 pub fn is_host_allowed(window_id: u32, url: &str) -> bool {
     // Internal URLs are always allowed
     let lower = url.to_lowercase();
-    if lower.starts_with("about:")
-        || lower.starts_with("nativewindow:")
-    {
+    if lower.starts_with("about:") || lower.starts_with("nativewindow:") {
         return true;
     }
     // Check the host component specifically (not a substring match)
