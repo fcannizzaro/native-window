@@ -426,10 +426,16 @@ impl Platform {
             // NavigationStarting event for javascript: URIs set via JS, so the
             // native navigation handler below never sees them.
             //
-            // Covers: Location.prototype (href/assign/replace), <a>/<area> clicks,
-            // HTMLAnchorElement.href, HTMLAreaElement.href, HTMLIFrameElement.src,
-            // HTMLFormElement.action setters, and a MutationObserver for dynamically
-            // injected elements.
+            // IMPORTANT: On Chromium/WebView2, Location.prototype properties are
+            // non-configurable (configurable: false). Object.defineProperty will
+            // throw. Each section is wrapped in its own try/catch so that a
+            // failure in one patch never disables subsequent protections.
+            //
+            // Covers: Location.prototype (href/assign/replace) with multi-level
+            // fallback, <a>/<area> click interception, HTMLAnchorElement.href,
+            // HTMLAreaElement.href, HTMLIFrameElement.src, HTMLFormElement.action
+            // setter patches, and a MutationObserver for dynamically injected
+            // elements.
             wv_builder = wv_builder.with_initialization_script(
                 r#"(function () {
   var BLOCKED_SCHEMES = ["javascript:", "data:", "file:", "blob:"];
@@ -441,94 +447,146 @@ impl Platform {
     });
   }
 
-  // ---- Location.prototype patches ----
-
-  // Patch Location.prototype.href setter
-  var desc = Object.getOwnPropertyDescriptor(Location.prototype, "href");
-  if (desc && desc.set) {
-    var originalSet = desc.set;
-    Object.defineProperty(Location.prototype, "href", {
-      set: function (value) {
-        if (!isBlocked(value)) originalSet.call(this, value);
-      },
-      get: desc.get,
-      enumerable: desc.enumerable,
-      configurable: desc.configurable,
-    });
+  // Helper: try to redefine an accessor property on a target object.
+  // Returns true on success, false if the property is non-configurable.
+  function tryPatchAccessor(target, prop, wrapSet) {
+    try {
+      var d = Object.getOwnPropertyDescriptor(target, prop);
+      if (d && d.set) {
+        var orig = d.set;
+        Object.defineProperty(target, prop, {
+          set: wrapSet(orig),
+          get: d.get,
+          enumerable: d.enumerable,
+          configurable: d.configurable,
+        });
+        return true;
+      }
+    } catch (e) {}
+    return false;
   }
 
-  // Patch Location.prototype.assign
-  var originalAssign = Location.prototype.assign;
-  Location.prototype.assign = function (url) {
-    if (!isBlocked(url)) originalAssign.call(this, url);
-  };
+  // Helper: try to redefine a data (method) property via defineProperty.
+  // Direct assignment (proto.method = fn) silently fails when writable is false.
+  function tryPatchMethod(target, prop, wrapFn) {
+    try {
+      var d = Object.getOwnPropertyDescriptor(target, prop);
+      if (d && typeof d.value === "function") {
+        var orig = d.value;
+        Object.defineProperty(target, prop, {
+          value: wrapFn(orig),
+          writable: d.writable,
+          enumerable: d.enumerable,
+          configurable: d.configurable,
+        });
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
 
-  // Patch Location.prototype.replace
-  var originalReplace = Location.prototype.replace;
-  Location.prototype.replace = function (url) {
-    if (!isBlocked(url)) originalReplace.call(this, url);
+  // ---- Location patches (href setter) ----
+  // On Chromium/WebView2, Location.prototype.href is configurable: false,
+  // so the first attempt throws. We try multiple levels:
+  //   1. Location.prototype
+  //   2. Object.getPrototypeOf(location) (may differ from Location.prototype)
+  //   3. Own property on the location instance itself
+  var hrefWrap = function (orig) {
+    return function (value) {
+      if (!isBlocked(value)) orig.call(this, value);
+    };
   };
+  if (!tryPatchAccessor(Location.prototype, "href", hrefWrap)) {
+    try {
+      var locProto = Object.getPrototypeOf(location);
+      if (locProto && locProto !== Location.prototype) {
+        tryPatchAccessor(locProto, "href", hrefWrap);
+      }
+    } catch (e) {}
+    // Last resort: try defining an own property on the location instance.
+    try {
+      var ld = Object.getOwnPropertyDescriptor(location, "href")
+            || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(location), "href");
+      if (ld && ld.set) {
+        var origLocSet = ld.set;
+        Object.defineProperty(location, "href", {
+          set: function (value) {
+            if (!isBlocked(value)) origLocSet.call(this, value);
+          },
+          get: ld.get,
+          enumerable: true,
+          configurable: true,
+        });
+      }
+    } catch (e) {}
+  }
+
+  // ---- Location patches (assign / replace) ----
+  // Use defineProperty instead of direct assignment — direct assignment
+  // silently fails when the property is non-writable on Chromium.
+  var assignWrap = function (orig) {
+    return function (url) {
+      if (!isBlocked(url)) orig.call(this, url);
+    };
+  };
+  tryPatchMethod(Location.prototype, "assign", assignWrap);
+  tryPatchMethod(Location.prototype, "replace", assignWrap);
 
   // ---- Click listener for <a>/<area> with blocked-scheme hrefs ----
   // Capturing phase so it fires before any page-level handlers.
   // Walks up the DOM to handle clicks on child elements inside anchors.
-  document.addEventListener("click", function (e) {
-    var t = e.target;
-    while (t && t !== document) {
-      if ((t.tagName === "A" || t.tagName === "AREA") && t.href && isBlocked(t.href)) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        return;
+  try {
+    document.addEventListener("click", function (e) {
+      var t = e.target;
+      while (t && t !== document) {
+        if ((t.tagName === "A" || t.tagName === "AREA") && t.href && isBlocked(t.href)) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          return;
+        }
+        t = t.parentElement;
       }
-      t = t.parentElement;
-    }
-  }, true);
+    }, true);
+  } catch (e) {}
 
   // ---- DOM property setter patches ----
   // Block setting dangerous-scheme URLs on element properties that
   // can trigger navigation or script execution.
-  function patchSetter(proto, prop) {
-    var d = Object.getOwnPropertyDescriptor(proto, prop);
-    if (d && d.set) {
-      var orig = d.set;
-      Object.defineProperty(proto, prop, {
-        set: function (v) { if (!isBlocked(v)) orig.call(this, v); },
-        get: d.get,
-        enumerable: d.enumerable,
-        configurable: d.configurable,
-      });
-    }
-  }
-  patchSetter(HTMLAnchorElement.prototype, "href");
-  patchSetter(HTMLAreaElement.prototype, "href");
-  patchSetter(HTMLIFrameElement.prototype, "src");
-  patchSetter(HTMLFormElement.prototype, "action");
+  var setterWrap = function (orig) {
+    return function (v) { if (!isBlocked(v)) orig.call(this, v); };
+  };
+  try { tryPatchAccessor(HTMLAnchorElement.prototype, "href", setterWrap); } catch (e) {}
+  try { tryPatchAccessor(HTMLAreaElement.prototype, "href", setterWrap); } catch (e) {}
+  try { tryPatchAccessor(HTMLIFrameElement.prototype, "src", setterWrap); } catch (e) {}
+  try { tryPatchAccessor(HTMLFormElement.prototype, "action", setterWrap); } catch (e) {}
 
   // ---- MutationObserver for dynamically injected elements ----
   // Sanitizes elements added via innerHTML, insertAdjacentHTML, etc.
-  function sanitize(el) {
-    var tag = el.tagName;
-    if ((tag === "A" || tag === "AREA") && el.hasAttribute("href") && isBlocked(el.getAttribute("href"))) {
-      el.removeAttribute("href");
-    } else if (tag === "IFRAME" && el.hasAttribute("src") && isBlocked(el.getAttribute("src"))) {
-      el.removeAttribute("src");
-    } else if (tag === "FORM" && el.hasAttribute("action") && isBlocked(el.getAttribute("action"))) {
-      el.removeAttribute("action");
+  try {
+    function sanitize(el) {
+      var tag = el.tagName;
+      if ((tag === "A" || tag === "AREA") && el.hasAttribute("href") && isBlocked(el.getAttribute("href"))) {
+        el.removeAttribute("href");
+      } else if (tag === "IFRAME" && el.hasAttribute("src") && isBlocked(el.getAttribute("src"))) {
+        el.removeAttribute("src");
+      } else if (tag === "FORM" && el.hasAttribute("action") && isBlocked(el.getAttribute("action"))) {
+        el.removeAttribute("action");
+      }
     }
-  }
-  var root = document.documentElement || document;
-  new MutationObserver(function (mutations) {
-    mutations.forEach(function (m) {
-      m.addedNodes.forEach(function (n) {
-        if (n.nodeType === 1) {
-          sanitize(n);
-          if (n.querySelectorAll) {
-            n.querySelectorAll("a[href],area[href],iframe[src],form[action]").forEach(sanitize);
+    var root = document.documentElement || document;
+    new MutationObserver(function (mutations) {
+      mutations.forEach(function (m) {
+        m.addedNodes.forEach(function (n) {
+          if (n.nodeType === 1) {
+            sanitize(n);
+            if (n.querySelectorAll) {
+              n.querySelectorAll("a[href],area[href],iframe[src],form[action]").forEach(sanitize);
+            }
           }
-        }
+        });
       });
-    });
-  }).observe(root, { childList: true, subtree: true });
+    }).observe(root, { childList: true, subtree: true });
+  } catch (e) {}
 })();"#
             );
 
