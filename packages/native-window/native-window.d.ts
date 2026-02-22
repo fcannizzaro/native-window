@@ -39,6 +39,12 @@ export interface WindowOptions {
    * When set, a `<meta http-equiv="Content-Security-Policy">` tag is injected
    * before any page scripts run.
    *
+   * **Limitation:** The CSP is applied via a `<meta>` tag at `DOMContentLoaded`,
+   * so scripts executing before that event are not restricted. Meta-tag CSP also
+   * cannot enforce `frame-ancestors` or `report-uri` directives. For stronger
+   * enforcement, serve pages via the custom protocol handler with a real HTTP
+   * `Content-Security-Policy` header.
+   *
    * @example `"default-src 'self'; script-src 'self' 'unsafe-inline'"`
    */
   csp?: string;
@@ -75,21 +81,29 @@ export interface WindowOptions {
   /**
    * Allow the webview to access the camera when requested.
    * Default: false (all camera requests are denied).
+   * @note Not yet enforced in the wry backend. The OS default (prompt user) applies.
    */
   allowCamera?: boolean;
   /**
    * Allow the webview to access the microphone when requested.
    * Default: false (all microphone requests are denied).
+   * @note Not yet enforced in the wry backend. The OS default (prompt user) applies.
    */
   allowMicrophone?: boolean;
   /**
    * Allow the webview to use the File System Access API
    * (`showOpenFilePicker`, `showSaveFilePicker`, `showDirectoryPicker`).
-   * Only effective on Windows (WebView2). macOS WKWebView does not
-   * support the File System Access API.
    * Default: false (all file system access requests are denied).
+   * @note Not yet enforced in the wry backend. The OS default applies.
    */
   allowFileSystem?: boolean;
+
+  /**
+   * Path to a PNG or ICO file for the window icon (title bar).
+   * On macOS this option is silently ignored (macOS doesn't support
+   * per-window icons). Relative paths resolve from the working directory.
+   */
+  icon?: string;
 }
 
 export class NativeWindow {
@@ -113,6 +127,8 @@ export class NativeWindow {
   setResizable(resizable: boolean): void;
   setDecorations(decorations: boolean): void;
   setAlwaysOnTop(alwaysOnTop: boolean): void;
+  /** Set the window icon from a PNG or ICO file path. Ignored on macOS. */
+  setIcon(path: string): void;
 
   // Window state
   show(): void;
@@ -155,8 +171,8 @@ export interface RuntimeInfo {
   available: boolean;
   /** The version string of the runtime, if detected. */
   version?: string;
-  /** The current platform: "macos", "windows", or "unsupported". */
-  platform: "macos" | "windows" | "unsupported";
+  /** The current platform: "macos", "windows", "linux", or "unsupported". */
+  platform: "macos" | "windows" | "linux" | "unsupported";
 }
 
 /**
@@ -164,6 +180,7 @@ export interface RuntimeInfo {
  *
  * - **macOS**: Always returns available (WKWebView is a system framework).
  * - **Windows**: Detects WebView2 via `GetAvailableCoreWebView2BrowserVersionString`.
+ * - **Linux**: Always returns available (WebKitGTK is required at build time).
  * - **Other**: Returns `{ available: false, platform: "unsupported" }`.
  */
 export function checkRuntime(): RuntimeInfo;
@@ -174,6 +191,7 @@ export function checkRuntime(): RuntimeInfo;
  * - **macOS**: Returns immediately (WKWebView is always available).
  * - **Windows**: If WebView2 is missing, downloads the Evergreen Bootstrapper
  *   (~2MB) from Microsoft and runs it silently. Throws on failure.
+ * - **Linux**: Returns immediately (WebKitGTK is required at build time).
  * - **Other**: Throws an error.
  *
  * @security This function downloads and executes a Microsoft-signed binary
@@ -203,3 +221,23 @@ export function ensureRuntime(): RuntimeInfo;
  * ```
  */
 export function sanitizeForJs(input: string): string;
+
+/**
+ * Returns the origin of pages loaded via `loadHtml()`.
+ *
+ * Use this in `trustedOrigins` to restrict IPC messages to only accept
+ * messages from `loadHtml()` content.
+ *
+ * - macOS/Linux: `"nativewindow://localhost"`
+ * - Windows: `"https://nativewindow.localhost"`
+ *
+ * @example
+ * ```ts
+ * import { NativeWindow, loadHtmlOrigin } from "@fcannizzaro/native-window";
+ *
+ * const win = new NativeWindow({
+ *   trustedOrigins: [loadHtmlOrigin()],
+ * });
+ * ```
+ */
+export function loadHtmlOrigin(): string;

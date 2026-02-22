@@ -27,6 +27,8 @@
       "optionalDependencies": {
         "@fcannizzaro/native-window-darwin-arm64": "0.1.3",
         "@fcannizzaro/native-window-darwin-x64": "0.1.3",
+        "@fcannizzaro/native-window-linux-arm64-gnu": "0.1.3",
+        "@fcannizzaro/native-window-linux-x64-gnu": "0.1.3",
         "@fcannizzaro/native-window-win32-arm64-msvc": "0.1.3",
         "@fcannizzaro/native-window-win32-x64-msvc": "0.1.3",
       },

@@ -1384,9 +1384,13 @@ describe("injected script hardening", () => {
     expect(script).toContain("r.length>1048576");
   });
 
-  test("injected _d() strips __proto__ from parsed JSON", () => {
+  test("injected _d() strips dangerous keys via JSON reviver", () => {
     const script = getClientScript();
-    expect(script).toMatch(/delete o\.__proto__/);
+    // Reviver filters __proto__, constructor, and prototype at all nesting levels
+    expect(script).toMatch(/__proto__/);
+    expect(script).toMatch(/constructor/);
+    expect(script).toMatch(/prototype/);
+    expect(script).toMatch(/JSON\.parse\(r,function/);
   });
 
   test("injected ch object is frozen to prevent monkey-patching", () => {

@@ -1,5 +1,10 @@
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction};
 
+// NOTE (V-25): All callbacks use ErrorStrategy::Fatal — if a JavaScript callback
+// throws an uncaught exception, the entire process will abort. This is a
+// deliberate fail-fast design choice. Users should wrap their callback bodies in
+// try/catch to prevent unhandled exceptions from crashing the application.
+
 /// Callback for string messages from the webview IPC: (message, source_url).
 pub type MessageCallback = ThreadsafeFunction<(String, String), ErrorStrategy::Fatal>;
 

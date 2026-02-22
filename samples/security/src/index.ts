@@ -6,7 +6,7 @@
  *
  * - **CSP** — restrictive Content Security Policy injected at document start.
  * - **DevTools disabled** — prevents content inspection in production.
- * - **Allowed hosts** — navigation locked to the synthetic HTML origin.
+ * - **Allowed hosts** — navigation locked to internal origins (auto-allowed for loadHtml).
  * - **Trusted origins** — dual-layer IPC filtering (native + IPC).
  * - **Channel namespace** — auto-nonce prevents event spoofing.
  * - **Rate limiting** — caps incoming IPC messages per second.
@@ -23,7 +23,9 @@
  */
 import { z } from "zod";
 import { createWindow } from "@fcannizzaro/native-window-ipc";
-import { sanitizeForJs } from "@fcannizzaro/native-window";
+import { sanitizeForJs, loadHtmlOrigin } from "@fcannizzaro/native-window";
+
+const origin = loadHtmlOrigin();
 
 // ── Schemas ────────────────────────────────────────────────
 
@@ -51,12 +53,11 @@ const ch = createWindow(
     decorations: true,
     devtools: false, // disabled in production
     csp: "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'",
-    trustedOrigins: ["https://native-window.local"],
-    allowedHosts: ["native-window.local"],
+    trustedOrigins: [origin],
   },
   {
     schemas,
-    trustedOrigins: ["https://native-window.local"],
+    trustedOrigins: [origin],
     channelId: true, // auto-nonce namespace
     maxMessageSize: 64 * 1024, // 64 KB
     rateLimit: 30, // 30 messages per second
@@ -161,9 +162,9 @@ ch.window.loadHtml(`
       <ul class="feature-list">
         <li><span class="check">+</span><div><span class="feature-label">CSP: </span><span class="feature-value">active</span></div></li>
         <li><span class="check">+</span><div><span class="feature-label">DevTools: </span><span class="feature-value">disabled</span></div></li>
-        <li><span class="check">+</span><div><span class="feature-label">Allowed Hosts: </span><span class="feature-value">native-window.local</span></div></li>
-        <li><span class="check">+</span><div><span class="feature-label">Trusted Origins (native): </span><span class="feature-value">https://native-window.local</span></div></li>
-        <li><span class="check">+</span><div><span class="feature-label">Trusted Origins (IPC): </span><span class="feature-value">https://native-window.local</span></div></li>
+        <li><span class="check">+</span><div><span class="feature-label">Allowed Hosts: </span><span class="feature-value">auto-allowed (loadHtml)</span></div></li>
+        <li><span class="check">+</span><div><span class="feature-label">Trusted Origins (native): </span><span class="feature-value">${origin}</span></div></li>
+        <li><span class="check">+</span><div><span class="feature-label">Trusted Origins (IPC): </span><span class="feature-value">${origin}</span></div></li>
         <li><span class="check">+</span><div><span class="feature-label">Channel Namespace: </span><span class="feature-value">auto-nonce</span></div></li>
         <li><span class="check">+</span><div><span class="feature-label">Rate Limit: </span><span class="feature-value">30/s</span></div></li>
         <li><span class="check">+</span><div><span class="feature-label">Max Message Size: </span><span class="feature-value">64 KB</span></div></li>
@@ -278,7 +279,7 @@ console.log("[Bun] Production security demo created. Close the window to exit.")
 console.log("[Bun] Security layers active:");
 console.log("[Bun]   CSP: default-src 'self'; script-src 'unsafe-inline'; ...");
 console.log("[Bun]   DevTools: disabled");
-console.log("[Bun]   Allowed hosts: native-window.local");
-console.log("[Bun]   Trusted origins: https://native-window.local (native + IPC)");
+console.log("[Bun]   Allowed hosts: auto-allowed (loadHtml content)");
+console.log(`[Bun]   Trusted origins: ${origin} (native + IPC)`);
 console.log("[Bun]   Channel namespace: auto-nonce");
 console.log("[Bun]   Rate limit: 30/s | Max size: 64 KB | Max listeners: 5");

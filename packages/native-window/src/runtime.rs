@@ -19,7 +19,7 @@ pub struct RuntimeInfo {
     pub available: bool,
     /// The version string of the runtime, if available.
     pub version: Option<String>,
-    /// The current platform: "macos", "windows", or "unsupported".
+    /// The current platform: "macos", "windows", "linux", or "unsupported".
     pub platform: String,
 }
 
@@ -27,6 +27,7 @@ pub struct RuntimeInfo {
 ///
 /// - **macOS**: Always returns available (WKWebView is a system framework).
 /// - **Windows**: Checks for WebView2 using `GetAvailableCoreWebView2BrowserVersionString`.
+/// - **Linux**: Always returns available (WebKitGTK is required at build time).
 /// - **Other**: Returns unavailable with platform "unsupported".
 #[napi]
 pub fn check_runtime() -> RuntimeInfo {
@@ -44,7 +45,16 @@ pub fn check_runtime() -> RuntimeInfo {
         check_runtime_windows()
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        RuntimeInfo {
+            available: true,
+            version: None,
+            platform: "linux".to_string(),
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         RuntimeInfo {
             available: false,
@@ -93,6 +103,7 @@ const BOOTSTRAPPER_URL: &str = "https://go.microsoft.com/fwlink/p/?LinkId=212470
 /// - **Windows**: Checks for WebView2. If not found, downloads the Evergreen
 ///   Bootstrapper (~2MB) from Microsoft and runs it silently. Returns the
 ///   runtime info after installation.
+/// - **Linux**: Returns immediately (WebKitGTK is required at build time).
 /// - **Other**: Returns an error.
 ///
 /// # Security
@@ -133,10 +144,19 @@ pub fn ensure_runtime() -> napi::Result<RuntimeInfo> {
         ensure_runtime_windows()
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        Ok(RuntimeInfo {
+            available: true,
+            version: None,
+            platform: "linux".to_string(),
+        })
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         Err(napi::Error::from_reason(
-            "Unsupported platform. Only macOS and Windows are supported.",
+            "Unsupported platform. Only macOS, Windows, and Linux are supported.",
         ))
     }
 }
@@ -162,7 +182,8 @@ fn ensure_runtime_windows() -> napi::Result<RuntimeInfo> {
             "-Command",
             &format!(
                 "Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing",
-                BOOTSTRAPPER_URL, installer_path_str.replace('\'', "''")
+                BOOTSTRAPPER_URL,
+                installer_path_str.replace('\'', "''")
             ),
         ])
         .output();

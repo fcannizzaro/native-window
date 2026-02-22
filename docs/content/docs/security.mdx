@@ -89,7 +89,7 @@ Pattern matching is case-insensitive:
 - **Exact:** `"example.com"` matches only `example.com`
 - **Wildcard:** `"*.example.com"` matches any subdomain of `example.com` (`sub.example.com`, `a.b.example.com`) **and** `example.com` itself
 
-Internal navigations (`about:blank`, `https://native-window.local/`, and `loadHtml()` content) are always permitted regardless of this setting. When `allowedHosts` is unset or empty, all hosts are allowed.
+Internal navigations (`about:blank`, `nativewindow://localhost/`, `https://nativewindow.localhost/`, and `loadHtml()` content) are always permitted regardless of this setting. When `allowedHosts` is unset or empty, all hosts are allowed.
 
 Use `onNavigationBlocked` to observe blocked attempts:
 
@@ -103,7 +103,20 @@ win.onNavigationBlocked((url) => {
 
 ### `loadHtml()` Base URL
 
-On macOS, content loaded via `loadHtml()` now uses a synthetic base URL (`https://native-window.local/`) instead of a null origin. This provides a consistent, non-null origin for the loaded content. On Windows, `loadHtml()` still uses `about:blank` as the origin (WebView2 limitation).
+Content loaded via `loadHtml()` uses a custom protocol that provides a proper origin on both platforms:
+
+- **macOS** — `nativewindow://localhost/` (WebKit treats registered custom schemes as secure contexts)
+- **Windows** — `https://nativewindow.localhost/` (WebView2 with HTTPS scheme mapping)
+
+Both origins are secure contexts, so APIs like `crypto.subtle`, `navigator.mediaDevices`, and CSP `'self'` work correctly on both platforms. Use `loadHtmlOrigin()` to get the correct origin for the current platform:
+
+```ts
+import { NativeWindow, loadHtmlOrigin } from "@fcannizzaro/native-window";
+
+const win = new NativeWindow({
+  trustedOrigins: [loadHtmlOrigin()],
+});
+```
 
 ### Runtime Installer Verification (Windows)
 

@@ -6,7 +6,7 @@
  * to a set of permitted host patterns. Blocked navigations fire the
  * `onNavigationBlocked` callback.
  *
- * Also shows how dangerous URL schemes (`javascript:`, `data:`, `file:`,
+ * Also shows how dangerous URL schemes (`data:`, `file:`,
  * `blob:`) are blocked at the native layer regardless of the allowlist.
  *
  * @security **Example only.** In production, restrict `allowedHosts` to
@@ -130,11 +130,6 @@ win.loadHtml(`
       <h3>github.com</h3>
       <div class="url">https://github.com</div>
       <div class="expected block">Expected: Blocked</div>
-    </div>
-    <div class="target-card" onclick="tryNavigate('javascript:alert(1)')">
-      <h3>javascript: scheme</h3>
-      <div class="url">javascript:alert(1)</div>
-      <div class="expected block">Expected: Blocked (scheme)</div>
     </div>
     <div class="target-card" onclick="tryNavigate('data:text/html,<h1>XSS</h1>')">
       <h3>data: scheme</h3>

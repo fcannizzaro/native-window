@@ -10,9 +10,10 @@ import {
   NativeWindow as _NativeWindow,
   checkRuntime,
   ensureRuntime,
+  loadHtmlOrigin,
 } from "./native-window.js";
 
-export { checkRuntime, ensureRuntime };
+export { checkRuntime, ensureRuntime, loadHtmlOrigin };
 
 export type { WindowOptions, RuntimeInfo } from "./native-window.js";
 
@@ -272,6 +273,16 @@ export class NativeWindow {
     this._native.setAlwaysOnTop(alwaysOnTop);
   }
 
+  /**
+   * Set the window icon from a PNG or ICO file path.
+   * On macOS this is silently ignored (macOS doesn't support per-window icons).
+   * Relative paths resolve from the working directory.
+   */
+  setIcon(path: string): void {
+    this._ensureOpen();
+    this._native.setIcon(path);
+  }
+
   // ---- Window state ----
 
   show(): void {
@@ -460,7 +471,11 @@ export class NativeWindow {
   getCookies(url?: string): Promise<CookieInfo[]> {
     this._ensureOpen();
     return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("getCookies() timed out after 10 seconds"));
+      }, 10_000);
       this._native.onCookies((raw: string) => {
+        clearTimeout(timeout);
         const validated = this._validateCookies(raw);
         if (validated) {
           resolve(validated);
@@ -501,16 +516,13 @@ export function run(intervalMs = 16): () => void {
 // ---------------------------------------------------------------------------
 
 /**
- * Escape a string for safe embedding inside a JavaScript **double-quoted**
- * string literal. Handles backslashes, double quotes, newlines, carriage
- * returns, null bytes, closing `</script>` tags, and Unicode line/paragraph
- * separators (U+2028, U+2029).
+ * Escape a string for safe embedding inside a JavaScript string literal.
+ * Handles backslashes, double quotes, newlines, carriage returns, null
+ * bytes, closing `</script>` tags, Unicode line/paragraph separators
+ * (U+2028, U+2029), backticks, and `${` template expressions.
  *
- * @security Backticks and `${` template expressions are **not** escaped, so
- * the output must only be interpolated into double-quoted (`"…"`) string
- * literals — never into single-quoted or template literals. Use this when
- * interpolating untrusted input into {@link NativeWindow.unsafe}
- * `evaluateJs()` calls to prevent script injection.
+ * Safe for use in double-quoted, single-quoted, and template literal
+ * contexts.
  *
  * @example
  * ```ts
@@ -523,5 +535,7 @@ export function run(intervalMs = 16): () => void {
 export function sanitizeForJs(input: string): string {
   return JSON.stringify(input)
     .slice(1, -1)
-    .replace(/<\/script>/gi, "<\\/script>");
+    .replace(/<\/script>/gi, "<\\/script>")
+    .replace(/`/g, "\\`")
+    .replace(/\$\{/g, "\\${");
 }

@@ -270,14 +270,16 @@ function encode(type: string, payload: unknown): string {
   return JSON.stringify({ $ch: type, p: payload });
 }
 
+/** @internal Keys that could pollute prototypes if merged into target objects. */
+const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 function decode(raw: string, maxSize: number = MAX_MESSAGE_SIZE): Envelope | null {
   if (raw.length > maxSize) return null;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    // Prevent prototype pollution from crafted __proto__ keys
-    if (typeof parsed === "object" && parsed !== null && "__proto__" in (parsed as Record<string, unknown>)) {
-      delete (parsed as Record<string, unknown>).__proto__;
-    }
+    // Reviver strips dangerous keys at every nesting level (defense-in-depth).
+    const parsed: unknown = JSON.parse(raw, (key, value) =>
+      DANGEROUS_KEYS.has(key) ? undefined : value,
+    );
     return isEnvelope(parsed) ? parsed : null;
   } catch {
     return null;
@@ -353,11 +355,11 @@ var _pfx=${prefixLiteral};
 var _l=Object.create(null);
 var _el=[];
 function _e(t,p){return JSON.stringify({$ch:_pfx?_pfx+":"+t:t,p:p})}
-function _d(r){if(r.length>1048576)return null;try{var o=JSON.parse(r);if(typeof o==="object"&&o!==null&&"__proto__" in o)delete o.__proto__;if(o&&typeof o.$ch==="string")return o}catch(e){}return null}
+function _d(r){if(r.length>1048576)return null;var _dk={__proto__:1,constructor:1,prototype:1};try{var o=JSON.parse(r,function(k,v){return _dk[k]?void 0:v});if(o&&typeof o.$ch==="string")return o}catch(e){}return null}
 function _uch(ch){if(!_pfx)return ch;if(ch.indexOf(_pfx+":")===0)return ch.slice(_pfx.length+1);return null}
 var ch={
 send:function(t,p){window.ipc.postMessage(_e(t,p))},
-on:function(t,h){if(!_l[t])_l[t]=[];_l[t].push(h)},
+on:function(t,h){if(!_l[t])_l[t]=[];_push.call(_l[t],h)},
 off:function(t,h){if(!_l[t])return;_l[t]=_filter.call(_l[t],function(f){return f!==h})}
 };
 var _orig=window.__native_message__;
@@ -366,9 +368,9 @@ var env=_d(msg);
 if(env){var key=_uch(env.$ch);if(key!==null&&_l[key]){var fns=_slice.call(_l[key]);for(var i=0;i<fns.length;i++){try{fns[i](env.p)}catch(e){}}}
 else{for(var j=0;j<_el.length;j++){try{_el[j](msg)}catch(e){}}if(_orig){_orig(msg)}}}
 else{for(var j=0;j<_el.length;j++){try{_el[j](msg)}catch(e){}}if(_orig){_orig(msg)}}
-},writable:false,configurable:false})}catch(e){}
-try{Object.defineProperty(window,'__native_message_listeners__',{value:Object.freeze({add:function(fn){if(typeof fn==='function')_push.call(_el,fn)},remove:function(fn){var i=_indexOf.call(_el,fn);if(i!==-1)_splice.call(_el,i,1)}}),writable:false,configurable:false})}catch(e){}
-try{Object.defineProperty(window,'__channel__',{value:Object.freeze(ch),writable:false,configurable:false})}catch(e){}
+},writable:false,configurable:false})}catch(e){console.error('[native-window] Failed to define __native_message__:',e)}
+try{Object.defineProperty(window,'__native_message_listeners__',{value:Object.freeze({add:function(fn){if(typeof fn==='function')_push.call(_el,fn)},remove:function(fn){var i=_indexOf.call(_el,fn);if(i!==-1)_splice.call(_el,i,1)}}),writable:false,configurable:false})}catch(e){console.error('[native-window] Failed to define __native_message_listeners__:',e)}
+try{Object.defineProperty(window,'__channel__',{value:Object.freeze(ch),writable:false,configurable:false})}catch(e){console.error('[native-window] Failed to define __channel__:',e)}
 })();`;
 }
 
@@ -415,9 +417,9 @@ export function createChannel<S extends SchemaMap>(
     channelId: channelIdOpt,
   } = options;
 
-  // Resolve channelId: true → random nonce, string → as-is, undefined → ""
+  // Resolve channelId: true → cryptographically random nonce, string → as-is, undefined → ""
   const channelId = channelIdOpt === true
-    ? Math.random().toString(36).slice(2, 10)
+    ? crypto.randomUUID().replace(/-/g, "").slice(0, 16)
     : (channelIdOpt ?? "");
 
   // Normalize trusted origins using WHATWG URL Standard so that
@@ -438,19 +440,22 @@ export function createChannel<S extends SchemaMap>(
 
   const listeners = new Map<string, Set<(payload: any) => void>>();
 
-  // Sliding window rate limiter state
-  const _rateLimitWindow: number[] = [];
+  // Token-bucket rate limiter state (O(1) per message)
+  let _bucketTokens = rateLimit ?? 0;
+  let _bucketLastRefill = Date.now();
 
   // Wire up incoming messages from the webview
   win.onMessage((raw: string, sourceUrl: string) => {
-    // Rate limiting — sliding window per second
+    // Rate limiting — token bucket, refills to `rateLimit` tokens per second
     if (rateLimit !== undefined && rateLimit > 0) {
       const now = Date.now();
-      while (_rateLimitWindow.length > 0 && _rateLimitWindow[0]! <= now - 1000) {
-        _rateLimitWindow.shift();
+      const elapsed = now - _bucketLastRefill;
+      if (elapsed >= 1000) {
+        _bucketTokens = rateLimit;
+        _bucketLastRefill = now;
       }
-      if (_rateLimitWindow.length >= rateLimit) return;
-      _rateLimitWindow.push(now);
+      if (_bucketTokens <= 0) return;
+      _bucketTokens--;
     }
 
     const env = decode(raw, maxMessageSize);
