@@ -3,6 +3,7 @@
     "fcannizzaro",
     "napi",
     "singlefile",
-    "clippy"
+    "clippy",
+    "exocommand"
   ]
 }
