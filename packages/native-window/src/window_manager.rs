@@ -235,7 +235,8 @@ thread_local! {
     pub static PENDING_COOKIES: RefCell<Vec<(u32, String)>> = RefCell::new(Vec::new());
     /// Per-window stored HTML content for the custom protocol handler.
     /// When loadHtml() is called, the HTML is stored here and the webview
-    /// navigates to `nativewindow://localhost/` which reads from this map.
+    /// navigates to the custom protocol URL which reads from this map.
+    /// macOS/Linux: `nativewindow://localhost/`, Windows: `https://nativewindow.localhost/`.
     pub static HTML_CONTENT_MAP: RefCell<HashMap<u32, String>> = RefCell::new(HashMap::new());
 }
 

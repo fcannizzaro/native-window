@@ -30,6 +30,20 @@ use crate::window_manager::{
 /// Maximum IPC message size (10 MB).
 const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
 
+/// Returns the URL for the custom protocol handler.
+///
+/// On macOS/Linux, this is `nativewindow://localhost/` (native custom scheme).
+/// On Windows, `with_https_scheme(true)` maps the custom protocol to
+/// `https://nativewindow.localhost/`, and wry's `load_url()` does NOT
+/// perform this translation at runtime — only the builder's `with_url()`
+/// does. So we must use the HTTPS-mapped URL directly on Windows.
+fn custom_protocol_url() -> &'static str {
+    #[cfg(target_os = "windows")]
+    { "https://nativewindow.localhost/" }
+    #[cfg(not(target_os = "windows"))]
+    { "nativewindow://localhost/" }
+}
+
 // ── Types ──────────────────────────────────────────────────────
 
 /// A window + webview pair managed by the platform.
@@ -89,11 +103,11 @@ impl Platform {
             Command::LoadHTML { id, html } => {
                 if let Some(entry) = self.windows.get(&id) {
                     // Store HTML for the custom protocol handler, then navigate
-                    // to nativewindow://localhost/ which triggers the handler.
+                    // to the custom protocol URL which triggers the handler.
                     // This gives the page a proper origin (secure context) and
                     // makes Cmd+R / browser-native reload work correctly.
                     crate::window_manager::set_html_content(id, html);
-                    entry.webview.load_url("nativewindow://localhost/")
+                    entry.webview.load_url(custom_protocol_url())
                         .map_err(|e| napi::Error::from_reason(format!("load_url (html) failed: {}", e)))?;
                 }
             }

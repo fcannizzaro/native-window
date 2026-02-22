@@ -2,7 +2,7 @@
 
 build-native-addon:
   description: "Build the native window module"
-  command: "napi build --release --platform"
+  command: "bun napi build --release --platform"
   cwd: ./packages/native-window
 
 clippy-native-addon:
