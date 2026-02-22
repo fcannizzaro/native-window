@@ -84,24 +84,25 @@ impl NativeWindow {
     // ---- Content loading ----
 
     /// Load a URL in the webview.
-    /// Blocks `javascript:`, `file:`, `data:`, and `blob:` URLs for security.
+    /// Only `http:`, `https:`, and internal `nativewindow:` schemes are allowed.
     #[napi]
     pub fn load_url(&self, url: String) -> Result<()> {
-        let lower = url.trim().to_lowercase();
-        if lower.starts_with("javascript:")
-            || lower.starts_with("file:")
-            || lower.starts_with("data:")
-            || lower.starts_with("blob:")
+        let trimmed = url.trim().to_string();
+        let lower = trimmed.to_lowercase();
+        // Allowlist: only permit safe schemes
+        if !lower.starts_with("http://")
+            && !lower.starts_with("https://")
+            && !lower.starts_with("nativewindow:")
         {
             return Err(napi::Error::from_reason(
-                "Blocked: javascript:, file:, data:, and blob: URLs are not allowed in loadUrl(). \
-                 Use evaluateJs() for script execution.",
+                "Blocked: only http:, https:, and nativewindow: URLs are allowed in loadUrl(). \
+                 Use evaluateJs() for script execution or loadHtml() for HTML content.",
             ));
         }
         with_manager(|mgr| {
             mgr.push_command(Command::LoadURL {
                 id: self.id,
-                url,
+                url: trimmed,
             });
         });
         Ok(())
@@ -136,16 +137,10 @@ impl NativeWindow {
     /// This calls `window.__native_message__(msg)` in the webview context.
     #[napi]
     pub fn post_message(&self, message: String) -> Result<()> {
-        let escaped = message
-            .replace('\\', "\\\\")
-            .replace('\'', "\\'")
-            .replace('\n', "\\n")
-            .replace('\r', "\\r")
-            .replace('\0', "\\0")
-            .replace('\u{2028}', "\\u2028")
-            .replace('\u{2029}', "\\u2029")
-            .replace("</", "<\\/");
-        let script = format!("if(window.__native_message__)window.__native_message__('{}');", escaped);
+        // Use json_escape() for safe embedding — handles all control chars,
+        // quotes, backslashes, and </script> in a single pass.
+        let safe_msg = crate::window_manager::json_escape(&message);
+        let script = format!("if(window.__native_message__)window.__native_message__({});", safe_msg);
         with_manager(|mgr| {
             mgr.push_command(Command::EvaluateJS {
                 id: self.id,
@@ -547,5 +542,18 @@ impl NativeWindow {
             }
         });
         Ok(())
+    }
+}
+
+// ── Drop ────────────────────────────────────────────────────────
+
+/// Enqueue a close command when a `NativeWindow` is garbage-collected
+/// without an explicit `close()` call, preventing event handler and
+/// security config leaks in the thread-local maps.
+impl Drop for NativeWindow {
+    fn drop(&mut self) {
+        with_manager(|mgr| {
+            mgr.push_command(Command::Close { id: self.id });
+        });
     }
 }

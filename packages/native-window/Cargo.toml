@@ -11,6 +11,9 @@ napi = { version = "2", features = ["napi8"] }
 napi-derive = "2"
 url = "2"
 tao = { version = "0.34.5", features = ["rwh_06"] }
+# NOTE: The "devtools" feature is always compiled in. DevTools are disabled at
+# runtime by default (options.devtools defaults to false). Production deployments
+# should never enable devtools, as it grants full DOM/JS inspection access.
 wry = { version = "0.54.2", features = ["devtools", "protocol"] }
 http = "1"
 
@@ -36,3 +39,4 @@ napi-build = "2"
 [profile.release]
 lto = true
 strip = "symbols"
+overflow-checks = true

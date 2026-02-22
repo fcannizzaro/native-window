@@ -39,6 +39,12 @@ export interface WindowOptions {
    * When set, a `<meta http-equiv="Content-Security-Policy">` tag is injected
    * before any page scripts run.
    *
+   * **Limitation:** The CSP is applied via a `<meta>` tag at `DOMContentLoaded`,
+   * so scripts executing before that event are not restricted. Meta-tag CSP also
+   * cannot enforce `frame-ancestors` or `report-uri` directives. For stronger
+   * enforcement, serve pages via the custom protocol handler with a real HTTP
+   * `Content-Security-Policy` header.
+   *
    * @example `"default-src 'self'; script-src 'self' 'unsafe-inline'"`
    */
   csp?: string;
@@ -91,11 +97,7 @@ export interface WindowOptions {
    * @note Not yet enforced in the wry backend. The OS default applies.
    */
   allowFileSystem?: boolean;
-  /**
-   * Allow the webview to access geolocation when requested.
-   * Default: false (navigator.geolocation is removed from the page).
-   */
-  allowGeolocation?: boolean;
+
   /**
    * Path to a PNG or ICO file for the window icon (title bar).
    * On macOS this option is silently ignored (macOS doesn't support

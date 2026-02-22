@@ -53,14 +53,16 @@ function encode(type: string, payload: unknown): string {
   return JSON.stringify({ $ch: type, p: payload });
 }
 
+/** @internal Keys that could pollute prototypes if merged into target objects. */
+const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 function decode(raw: string): Envelope | null {
   if (raw.length > MAX_MESSAGE_SIZE) return null;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    // Prevent prototype pollution from crafted __proto__ keys
-    if (typeof parsed === "object" && parsed !== null && "__proto__" in (parsed as Record<string, unknown>)) {
-      delete (parsed as Record<string, unknown>).__proto__;
-    }
+    // Reviver strips dangerous keys at every nesting level (defense-in-depth).
+    const parsed: unknown = JSON.parse(raw, (key, value) =>
+      DANGEROUS_KEYS.has(key) ? undefined : value,
+    );
     if (
       typeof parsed === "object" &&
       parsed !== null &&

@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tao::event_loop::EventLoop;
 
@@ -139,6 +139,10 @@ pub struct WindowManager {
 /// Commands are still accepted to avoid silently dropping operations.
 const MAX_COMMAND_QUEUE: usize = 10_000;
 
+/// Maximum entries in any single PENDING_* event buffer.
+/// Events are dropped when the buffer reaches this size.
+pub const MAX_PENDING_EVENTS: usize = 50_000;
+
 impl WindowManager {
     pub fn new() -> Self {
         Self {
@@ -150,6 +154,11 @@ impl WindowManager {
         }
     }
 
+    /// Allocate a monotonically increasing window ID.
+    ///
+    /// IDs are never recycled — the u32 space (~4.29 billion) is large enough
+    /// that exhaustion is effectively impossible in practice. Returns an error
+    /// if overflow would occur.
     pub fn allocate_id(&mut self) -> napi::Result<u32> {
         let id = self.next_id;
         self.next_id = self.next_id.checked_add(1).ok_or_else(|| {
@@ -162,11 +171,12 @@ impl WindowManager {
     pub fn push_command(&mut self, cmd: Command) {
         if self.command_queue.len() >= MAX_COMMAND_QUEUE {
             eprintln!(
-                "[native-window] Warning: command queue has {} entries (limit: {}). \
-                 Possible runaway loop or missing pumpEvents() call.",
+                "[native-window] Command queue full ({} entries, limit: {}). \
+                 Dropping command. Possible runaway loop or missing pumpEvents() call.",
                 self.command_queue.len(),
                 MAX_COMMAND_QUEUE
             );
+            return;
         }
         self.command_queue.push(cmd);
     }
@@ -242,6 +252,8 @@ thread_local! {
     /// navigates to the custom protocol URL which reads from this map.
     /// macOS/Linux: `nativewindow://localhost/`, Windows: `https://nativewindow.localhost/`.
     pub static HTML_CONTENT_MAP: RefCell<HashMap<u32, String>> = RefCell::new(HashMap::new());
+    /// Set of window IDs that have already been warned about missing trustedOrigins.
+    static ORIGIN_WARNED: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
 }
 
 /// Execute a closure with mutable access to the global window manager.
@@ -315,7 +327,7 @@ pub fn extract_origin(raw: &str) -> Option<String> {
 
 /// Check if a source URL's origin matches any of the trusted origins for a window.
 /// Returns `true` if:
-///   - No trusted origins are configured for this window (allow all), or
+///   - No trusted origins are configured for this window (allow all, with warning), or
 ///   - The source URL's origin matches one of the trusted origins.
 pub fn is_origin_trusted(window_id: u32, source_url: &str) -> bool {
     TRUSTED_ORIGINS_MAP.with(|o| {
@@ -329,46 +341,30 @@ pub fn is_origin_trusted(window_id: u32, source_url: &str) -> bool {
                 None => false, // Malformed URL = untrusted
             }
         } else {
-            true // No trusted_origins configured = allow all
+            // No trusted_origins configured = allow all (insecure default).
+            // Log a warning once per window so developers are aware.
+            ORIGIN_WARNED.with(|w| {
+                let mut set = w.borrow_mut();
+                if set.insert(window_id) {
+                    eprintln!(
+                        "[native-window] Warning: window {} has no trustedOrigins configured. \
+                         All IPC message origins are accepted. Set trustedOrigins to restrict.",
+                        window_id
+                    );
+                }
+            });
+            true
         }
     })
 }
 
 // ── Navigation host restriction ────────────────────────────────
 
-/// Extract the host (without port) from a URL string.
+/// Extract the host (without port) from a URL string using the `url` crate.
 /// Returns `None` for URLs without a host (e.g., `about:blank`, `data:` URIs).
-fn extract_host(url: &str) -> Option<&str> {
-    let scheme_end = url.find("://")?;
-    let rest = &url[scheme_end + 3..];
-    // Strip userinfo (user:pass@) if present
-    let after_at = match rest.find('@') {
-        Some(i) => &rest[i + 1..],
-        None => rest,
-    };
-    // Find end of host (before /, ?, #, or end)
-    let host_end = after_at
-        .find(|c: char| c == '/' || c == '?' || c == '#')
-        .unwrap_or(after_at.len());
-    let host_port = &after_at[..host_end];
-    if host_port.is_empty() {
-        return None;
-    }
-    // Strip port — handle IPv6 [::1]:port
-    let host = if host_port.starts_with('[') {
-        let bracket_end = host_port.find(']').unwrap_or(host_port.len());
-        &host_port[..=bracket_end]
-    } else {
-        match host_port.rfind(':') {
-            Some(i) => &host_port[..i],
-            None => host_port,
-        }
-    };
-    if host.is_empty() {
-        None
-    } else {
-        Some(host)
-    }
+fn extract_host(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    parsed.host_str().map(|h| h.to_owned())
 }
 
 /// Check if a URL's host is permitted by the window's `allowedHosts` list.
@@ -386,9 +382,14 @@ pub fn is_host_allowed(window_id: u32, url: &str) -> bool {
     let lower = url.to_lowercase();
     if lower.starts_with("about:")
         || lower.starts_with("nativewindow:")
-        || lower.contains("nativewindow.localhost")
     {
         return true;
+    }
+    // Check the host component specifically (not a substring match)
+    if let Ok(parsed) = url::Url::parse(url) {
+        if parsed.host_str() == Some("nativewindow.localhost") {
+            return true;
+        }
     }
 
     ALLOWED_HOSTS_MAP.with(|h| {
@@ -425,8 +426,13 @@ pub fn is_host_allowed(window_id: u32, url: &str) -> bool {
 
 // ── JSON helpers ────────────────────────────────────────────────
 
-/// Escape a string for safe embedding as a JSON string value.
+/// Escape a string for safe embedding as a JSON string value in JavaScript.
 /// The returned string includes surrounding double quotes.
+///
+/// In addition to the standard JSON escapes, this also escapes:
+///   - `/` as `\/` to prevent `</script>` injection in HTML contexts
+///   - U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR)
+///     which are valid JSON but terminate JS string literals
 pub fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -434,9 +440,12 @@ pub fn json_escape(s: &str) -> String {
         match c {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
+            '/' => out.push_str("\\/"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
             c if (c as u32) < 0x20 => {
                 out.push_str(&format!("\\u{:04x}", c as u32));
             }

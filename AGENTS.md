@@ -4,8 +4,9 @@
 
 - Do **not** run `bun run build`. You may run tests (for typescript).
 - Do **not** install Rust packages (`cargo install`, `cargo add`) or build the native addon, update only the `cargo.toml`.
-- To **build the addon** use the  tool `execute("build-native-addon")`
-- To **run clippy** use the  tool `execute("clippy-native-addon")`
+- To **build the addon** use the  tool `execute("build-native-addon")`.
+- To **run clippy** use the  tool `execute("clippy-native-addon")`.
+- After every new feature or fix remember to run both the linter and the native addon build.
 - The `native-window-ipc` package must remain **pure TypeScript** with zero runtime dependencies.
 
 ## Project Overview

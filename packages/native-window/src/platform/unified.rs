@@ -21,14 +21,38 @@ use wry::WebViewBuilderExtWindows;
 use crate::events::WindowEventHandlers;
 use crate::options::WindowOptions;
 use crate::window_manager::{
-    is_host_allowed, is_origin_trusted, json_escape, Command, EVENT_LOOP,
-    PENDING_BLURS, PENDING_CLOSES, PENDING_COOKIES, PENDING_FOCUSES,
+    is_host_allowed, is_origin_trusted, json_escape, Command, MAX_PENDING_EVENTS,
+    EVENT_LOOP, PENDING_BLURS, PENDING_CLOSES, PENDING_COOKIES, PENDING_FOCUSES,
     PENDING_MESSAGES, PENDING_MOVES, PENDING_NAVIGATION_BLOCKED,
     PENDING_PAGE_LOADS, PENDING_RESIZE_CALLBACKS, PENDING_TITLE_CHANGES,
 };
 
 /// Maximum IPC message size (10 MB).
 const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+
+/// Maximum pending IPC messages per window before new messages are dropped.
+const MAX_PENDING_MESSAGES_PER_WINDOW: usize = 10_000;
+
+/// Push an item to a thread-local pending buffer, enforcing MAX_PENDING_EVENTS.
+/// Silently drops the item (with a one-time warning) if the buffer is full.
+macro_rules! capped_push {
+    ($tls:ident, $item:expr, $label:expr) => {
+        $tls.with(|p| {
+            let mut buf = p.borrow_mut();
+            if buf.len() >= MAX_PENDING_EVENTS {
+                // Only warn once per overflow (first drop)
+                if buf.len() == MAX_PENDING_EVENTS {
+                    eprintln!(
+                        "[native-window] {} buffer full ({} entries), dropping events.",
+                        $label, MAX_PENDING_EVENTS
+                    );
+                }
+                return;
+            }
+            buf.push($item);
+        });
+    };
+}
 
 /// Returns the URL for the custom protocol handler.
 ///
@@ -189,9 +213,7 @@ impl Platform {
                 // Event handlers are NOT removed here — they are cleaned
                 // up after flush_pending_callbacks so the JS on_close
                 // callback still fires.
-                PENDING_CLOSES.with(|p| {
-                    p.borrow_mut().push(id);
-                });
+                capped_push!(PENDING_CLOSES, id, "PENDING_CLOSES");
             }
             Command::Focus { id } => {
                 if let Some(entry) = self.windows.get(&id) {
@@ -240,6 +262,7 @@ impl Platform {
                         }
                     };
                     PENDING_COOKIES.with(|p| {
+                        // Cookies always push — getCookies() promises need a response.
                         p.borrow_mut().push((id, json));
                     });
                 }
@@ -380,7 +403,16 @@ impl Platform {
                 }
 
                 PENDING_MESSAGES.with(|p| {
-                    p.borrow_mut().push((window_id, message, source_url));
+                    let mut buf = p.borrow_mut();
+                    let count = buf.iter().filter(|(id, _, _)| *id == window_id).count();
+                    if count >= MAX_PENDING_MESSAGES_PER_WINDOW {
+                        eprintln!(
+                            "[native-window] Window {}: pending IPC message cap ({}) reached, dropping message.",
+                            window_id, MAX_PENDING_MESSAGES_PER_WINDOW
+                        );
+                        return;
+                    }
+                    buf.push((window_id, message, source_url));
                 });
             });
 
@@ -389,10 +421,14 @@ impl Platform {
                 let lower = url.to_lowercase();
                 // Always allow our custom protocol for HTML content.
                 // macOS: nativewindow://localhost/, Windows: https://nativewindow.localhost/
-                if lower.starts_with("nativewindow:")
-                    || lower.contains("nativewindow.localhost")
-                {
+                if lower.starts_with("nativewindow:") {
                     return true;
+                }
+                // Check host component specifically (not a substring match)
+                if let Ok(parsed) = url::Url::parse(&url) {
+                    if parsed.host_str() == Some("nativewindow.localhost") {
+                        return true;
+                    }
                 }
                 // Block dangerous URL schemes
                 if lower.starts_with("javascript:")
@@ -404,9 +440,7 @@ impl Platform {
                 }
                 // Enforce allowedHosts
                 if !is_host_allowed(window_id, &url) {
-                    PENDING_NAVIGATION_BLOCKED.with(|p| {
-                        p.borrow_mut().push((window_id, url));
-                    });
+                    capped_push!(PENDING_NAVIGATION_BLOCKED, (window_id, url), "PENDING_NAVIGATION_BLOCKED");
                     return false;
                 }
                 true
@@ -419,15 +453,16 @@ impl Platform {
                     wry::PageLoadEvent::Finished => "finished".to_string(),
                 };
                 PENDING_PAGE_LOADS.with(|p| {
-                    p.borrow_mut().push((window_id, event_str, url));
+                    let mut buf = p.borrow_mut();
+                    if buf.len() < MAX_PENDING_EVENTS {
+                        buf.push((window_id, event_str, url));
+                    }
                 });
             });
 
             // Title changed handler
             wv_builder = wv_builder.with_document_title_changed_handler(move |title| {
-                PENDING_TITLE_CHANGES.with(|p| {
-                    p.borrow_mut().push((window_id, title));
-                });
+                capped_push!(PENDING_TITLE_CHANGES, (window_id, title), "PENDING_TITLE_CHANGES");
             });
 
             // Custom protocol handler — serves stored HTML content at nativewindow://localhost/
@@ -441,7 +476,11 @@ impl Platform {
                     .header("Content-Type", "text/html; charset=utf-8")
                     .header("Cache-Control", "no-store")
                     .body(Cow::Owned(html.into_bytes()))
-                    .unwrap()
+                    .unwrap_or_else(|_| {
+                        http::Response::builder()
+                            .body(Cow::Owned(Vec::new()))
+                            .expect("empty fallback response")
+                    })
             });
 
             // Block popups (window.open)
@@ -449,28 +488,44 @@ impl Platform {
                 wry::NewWindowResponse::Deny
             });
 
-            // CSP injection via initialization script
+            // CSP injection via initialization script.
+            // Uses json_escape() to safely embed the CSP value as a JSON string,
+            // preventing injection via newlines, quotes, null bytes, etc.
+            //
             if let Some(ref csp) = options.csp {
-                let escaped_csp = csp.replace('\\', "\\\\").replace('\'', "\\'");
+                let safe_csp = crate::window_manager::json_escape(csp);
                 let csp_script = format!(
                     "document.addEventListener('DOMContentLoaded',function(){{var m=document.createElement('meta');\
-                    m.httpEquiv='Content-Security-Policy';m.content='{}';document.head.insertBefore(m,\
+                    m.httpEquiv='Content-Security-Policy';m.content={};document.head.insertBefore(m,\
                     document.head.firstChild)}},{{once:true}});",
-                    escaped_csp
+                    safe_csp
                 );
                 wv_builder = wv_builder.with_initialization_script(&csp_script);
             }
 
-            // Geolocation blocking — remove the API entirely if not allowed
+            // Permission flags — wry does not expose permission delegates, so
+            // camera/mic/filesystem flags cannot be enforced. Log a warning if
+            // the user explicitly set any of these to make them aware.
             let perms = crate::window_manager::get_permissions(id);
-            if !perms.allow_camera && !perms.allow_microphone {
-                // Note: wry doesn't expose permission delegates.
-                // Camera/mic permissions are handled by the OS default (prompt user).
-                // We document this as a known limitation of the wry backend.
+            if perms.allow_camera {
+                eprintln!(
+                    "[native-window] Window {}: allowCamera is set but not enforced by the wry backend. \
+                     The OS default (user prompt) applies.",
+                    id
+                );
             }
-            if !options.allow_geolocation.unwrap_or(false) {
-                wv_builder = wv_builder.with_initialization_script(
-                    "Object.defineProperty(navigator,'geolocation',{value:undefined,writable:false,configurable:false});"
+            if perms.allow_microphone {
+                eprintln!(
+                    "[native-window] Window {}: allowMicrophone is set but not enforced by the wry backend. \
+                     The OS default (user prompt) applies.",
+                    id
+                );
+            }
+            if perms.allow_file_system {
+                eprintln!(
+                    "[native-window] Window {}: allowFileSystem is set but not enforced by the wry backend. \
+                     The OS default applies.",
+                    id
                 );
             }
 
@@ -542,28 +597,24 @@ impl Platform {
                                             .map(|e| e.window.scale_factor())
                                             .unwrap_or(1.0);
                                         let logical: LogicalSize<f64> = size.to_logical(scale);
-                                        PENDING_RESIZE_CALLBACKS.with(|p| {
-                                            p.borrow_mut().push((id, logical.width, logical.height));
-                                        });
+                                        capped_push!(PENDING_RESIZE_CALLBACKS, (id, logical.width, logical.height), "PENDING_RESIZE_CALLBACKS");
                                     }
                                     WindowEvent::Moved(pos) => {
                                         let scale = windows.get(&id)
                                             .map(|e| e.window.scale_factor())
                                             .unwrap_or(1.0);
                                         let logical: LogicalPosition<f64> = pos.to_logical(scale);
-                                        PENDING_MOVES.with(|p| {
-                                            p.borrow_mut().push((id, logical.x, logical.y));
-                                        });
+                                        capped_push!(PENDING_MOVES, (id, logical.x, logical.y), "PENDING_MOVES");
                                     }
                                     WindowEvent::Focused(focused) => {
                                         if *focused {
-                                            PENDING_FOCUSES.with(|p| p.borrow_mut().push(id));
+                                            capped_push!(PENDING_FOCUSES, id, "PENDING_FOCUSES");
                                         } else {
-                                            PENDING_BLURS.with(|p| p.borrow_mut().push(id));
+                                            capped_push!(PENDING_BLURS, id, "PENDING_BLURS");
                                         }
                                     }
                                     WindowEvent::CloseRequested => {
-                                        PENDING_CLOSES.with(|p| p.borrow_mut().push(id));
+                                        capped_push!(PENDING_CLOSES, id, "PENDING_CLOSES");
                                     }
                                     _ => {}
                                 }
@@ -619,7 +670,10 @@ impl Platform {
         const K_CF_RUN_LOOP_RUN_HANDLED_SOURCE: i32 = 4;
 
         unsafe {
-            let mtm = MainThreadMarker::new().unwrap();
+            let Some(mtm) = MainThreadMarker::new() else {
+                eprintln!("[native-window] drain_macos_events called from non-main thread; skipping");
+                return;
+            };
             let app = NSApplication::sharedApplication(mtm);
 
             loop {

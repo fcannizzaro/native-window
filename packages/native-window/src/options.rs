@@ -74,9 +74,7 @@ pub struct WindowOptions {
     /// showSaveFilePicker, showDirectoryPicker).
     /// Default: false (all file system access requests are denied).
     pub allow_file_system: Option<bool>,
-    /// Allow the webview to access geolocation when requested.
-    /// Default: false (navigator.geolocation is removed from the page).
-    pub allow_geolocation: Option<bool>,
+
     /// Path to a PNG or ICO file for the window icon (title bar).
     /// On macOS this option is silently ignored (macOS doesn't support
     /// per-window icons). Relative paths resolve from the working directory.
@@ -107,7 +105,7 @@ impl Default for WindowOptions {
             allow_camera: None,
             allow_microphone: None,
             allow_file_system: None,
-            allow_geolocation: None,
+
             icon: None,
         }
     }
