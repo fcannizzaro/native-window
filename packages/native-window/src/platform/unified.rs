@@ -420,25 +420,23 @@ impl Platform {
                 });
             });
 
-            // JS-level dangerous-scheme blocking — comprehensive patches to prevent
-            // javascript:, data:, file:, and blob: URIs from executing in the webview.
-            // This is necessary because WebView2 on Windows does NOT fire its
-            // NavigationStarting event for javascript: URIs set via JS, so the
-            // native navigation handler below never sees them.
+            // JS-level dangerous-scheme blocking — patches to prevent data:, file:,
+            // and blob: URIs from executing in the webview via DOM element
+            // properties, anchor clicks, and dynamic element injection.
             //
-            // IMPORTANT: On Chromium/WebView2, Location.prototype properties are
-            // non-configurable (configurable: false). Object.defineProperty will
-            // throw. Each section is wrapped in its own try/catch so that a
-            // failure in one patch never disables subsequent protections.
+            // NOTE: javascript: is intentionally NOT blocked here. It can only be
+            // triggered by code already running in the webview (client-side JS),
+            // so blocking it adds no security value. On WebView2 (Chromium),
+            // Location.prototype is non-configurable at the C++ level, making
+            // JS-level interception impossible anyway. javascript: is still
+            // blocked by the native navigation handler (macOS/Linux) and the
+            // Rust loadUrl() allowlist (all platforms).
             //
-            // Covers: Location.prototype (href/assign/replace) with multi-level
-            // fallback, <a>/<area> click interception, HTMLAnchorElement.href,
-            // HTMLAreaElement.href, HTMLIFrameElement.src, HTMLFormElement.action
-            // setter patches, and a MutationObserver for dynamically injected
-            // elements.
+            // Each section is wrapped in its own try/catch so that a failure
+            // in one patch never disables subsequent protections.
             wv_builder = wv_builder.with_initialization_script(
                 r#"(function () {
-  var BLOCKED_SCHEMES = ["javascript:", "data:", "file:", "blob:"];
+  var BLOCKED_SCHEMES = ["data:", "file:", "blob:"];
 
   function isBlocked(url) {
     var lower = (url + "").trim().toLowerCase();
