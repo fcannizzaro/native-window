@@ -1,0 +1,11 @@
+# ExoCommand Configuration
+
+build-native-addon:
+  description: "Build the native window module"
+  command: "napi build --release --platform"
+  cwd: ./packages/native-window
+
+clippy-native-addon:
+  description: "Run Rust linter (clippy) for the native window module"
+  command: "cargo clippy"
+  cwd: ./packages/native-window

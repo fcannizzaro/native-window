@@ -72,7 +72,7 @@ impl Platform {
     pub fn process_command(
         &mut self,
         cmd: Command,
-        event_handlers: &mut HashMap<u32, WindowEventHandlers>,
+        _event_handlers: &mut HashMap<u32, WindowEventHandlers>,
     ) -> napi::Result<()> {
         match cmd {
             Command::CreateWindow { id, options } => {
@@ -153,28 +153,13 @@ impl Platform {
                 }
             }
             Command::Close { id } => {
-                if let Some(entry) = self.windows.remove(&id) {
-                    let tao_id = entry.window.id();
-                    self.window_id_map.remove(&tao_id);
-                    // Drop entry — this closes the window and destroys the webview
-                    drop(entry);
-                    // Clean up event handlers and security config
-                    event_handlers.remove(&id);
-                    crate::window_manager::TRUSTED_ORIGINS_MAP.with(|o| {
-                        o.borrow_mut().remove(&id);
-                    });
-                    crate::window_manager::ALLOWED_HOSTS_MAP.with(|h| {
-                        h.borrow_mut().remove(&id);
-                    });
-                    crate::window_manager::PERMISSIONS_MAP.with(|p| {
-                        p.borrow_mut().remove(&id);
-                    });
-                    crate::window_manager::remove_html_content(id);
-                    // Fire on_close callback
-                    PENDING_CLOSES.with(|p| {
-                        p.borrow_mut().push(id);
-                    });
-                }
+                self.destroy_window_entry(id);
+                // Event handlers are NOT removed here — they are cleaned
+                // up after flush_pending_callbacks so the JS on_close
+                // callback still fires.
+                PENDING_CLOSES.with(|p| {
+                    p.borrow_mut().push(id);
+                });
             }
             Command::Focus { id } => {
                 if let Some(entry) = self.windows.get(&id) {
@@ -229,6 +214,55 @@ impl Platform {
             }
         }
         Ok(())
+    }
+
+    // ── Window destruction ──────────────────────────────────────
+
+    /// Remove and destroy a window's native resources (tao Window + wry
+    /// WebView) and clean up associated platform state.  Does NOT touch
+    /// `event_handlers` — those must survive until after
+    /// `flush_pending_callbacks` so the JS `on_close` callback still fires.
+    ///
+    /// Returns `true` if the window existed and was destroyed.
+    fn destroy_window_entry(&mut self, id: u32) -> bool {
+        if let Some(entry) = self.windows.remove(&id) {
+            let tao_id = entry.window.id();
+            self.window_id_map.remove(&tao_id);
+            // Drop entry — this closes the window and destroys the webview
+            drop(entry);
+            // Clean up security config
+            crate::window_manager::TRUSTED_ORIGINS_MAP.with(|o| {
+                o.borrow_mut().remove(&id);
+            });
+            crate::window_manager::ALLOWED_HOSTS_MAP.with(|h| {
+                h.borrow_mut().remove(&id);
+            });
+            crate::window_manager::PERMISSIONS_MAP.with(|p| {
+                p.borrow_mut().remove(&id);
+            });
+            crate::window_manager::remove_html_content(id);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Destroy native resources for windows that received an OS-initiated
+    /// `CloseRequested` but weren't already destroyed by `Command::Close`.
+    ///
+    /// This ensures the tao Window and wry WebView are properly dropped
+    /// **before** the JS `on_close` callback fires.  Without this, an
+    /// abrupt `process.exit()` in the callback leaves live native objects
+    /// whose teardown fails (e.g. WebView2 "Failed to unregister class"
+    /// on Windows).
+    pub fn destroy_pending_closes(&mut self) {
+        PENDING_CLOSES.with(|p| {
+            let pending = p.borrow();
+            for &id in pending.iter() {
+                // No-op if already destroyed by Command::Close
+                self.destroy_window_entry(id);
+            }
+        });
     }
 
     // ── Window creation ────────────────────────────────────────

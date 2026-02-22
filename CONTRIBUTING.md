@@ -20,6 +20,10 @@ cd native-window
 bun install
 ```
 
+## Agent & MCP
+
+- [exocommand](https://github.com/fcannizzaro/exocommand) — MCP server that exposes shell commands as tools for AI coding assistants. Required to allow agents to run Rust native compilation (`cargo build`) and linting (`cargo clippy`) through the defined `.exocommand` configuration.
+
 ## Project Structure
 
 ```

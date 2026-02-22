@@ -71,6 +71,13 @@ pub fn pump_events() -> napi::Result<()> {
 
         plat.pump_events();
 
+        // Destroy native resources for windows that received OS-initiated
+        // CloseRequested.  This ensures tao::Window and wry::WebView are
+        // properly dropped before the JS on_close callback fires — an
+        // abrupt process.exit() in the callback would otherwise leave live
+        // native objects whose teardown fails on Windows.
+        plat.destroy_pending_closes();
+
         match first_err {
             Some(e) => Err(e),
             None => Ok(()),
@@ -84,7 +91,18 @@ pub fn pump_events() -> napi::Result<()> {
         mgr.platform = platform;
         mgr.event_handlers = event_handlers;
 
+        // Snapshot which windows are pending close before flush drains
+        // the buffer — we need the IDs for handler cleanup afterward.
+        let closed_ids: Vec<u32> =
+            PENDING_CLOSES.with(|p| p.borrow().clone());
+
         flush_pending_callbacks(&mgr.event_handlers);
+
+        // Clean up event handlers for all closed windows now that
+        // callbacks have been dispatched.
+        for id in closed_ids {
+            mgr.event_handlers.remove(&id);
+        }
     });
 
     result
